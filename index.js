@@ -71,9 +71,11 @@ async function st() {
 
 // ---------------------------------------------------------------- display regex
 //
-// Presets and cards often print status lines (clock, scene, stats) that a regex script turns
-// into a panel or hides when the chat is shown. Previews run the same display scripts first,
-// so whatever the chat never shows as story never shows here either.
+// Presets and cards often print status lines (clock, scene, stats) that a regex script hides
+// when the chat is shown. Previews run those hiding scripts too (the ones that replace their
+// match with nothing). Scripts that turn the match into something — a status panel, a game
+// widget with its own code — are skipped: the raw tags they work on are removed whole by
+// cleanPreview, the same way Chat Auto Backup cleans its previews.
 
 let regex = null; // { run, scriptsOf } once SillyTavern's regex engine is loaded
 async function loadRegex() {
@@ -106,7 +108,7 @@ async function loadRegex() {
 /** One pass of reading: the scripts that apply to display, computed once per list load. */
 function displayRegexer() {
     if (!regex?.run) return (text) => text;
-    const ok = s => s && !s.disabled && !s.promptOnly && Array.isArray(s.placement);
+    const ok = s => s && !s.disabled && !s.promptOnly && Array.isArray(s.placement) && !String(s.replaceString ?? '').trim();
     const base = regex.base().filter(ok);
     const byAvatar = new Map();
     return (text, { avatar = null, user = false, name } = {}) => {
