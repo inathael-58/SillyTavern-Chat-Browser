@@ -58,6 +58,22 @@ test('raw JSON state (whole, cut off, or a fragment) goes away', () => {
     assert.equal(cleanPreview('["Hello"] she whispered.'), '["Hello"] she whispered.');
 });
 
+test('widget code from a card regex leaves nothing behind', () => {
+    const widget = `<div class="salvage"><script>
+const m = text.match(/salvage_save\s*({[\s\S]*?})\s*[\s\S]*?(<\/div>)/);
+let html = '<div class="row">' + "…ใช้สัญญาณลวงล่อให้พวกมันหันไปทางอื่นก่อน" + '</div>';
+document.querySelector('.salvage').innerHTML = html;
+</script><b>HULL</b> 5/6</div>`;
+    assert.equal(cleanPreview(`ลมพัดผ่านซากเรือ "ระวังข้างหลัง!"\n${widget}`), 'ลมพัดผ่านซากเรือ "ระวังข้างหลัง!"');
+    assert.equal(cleanPreview('<style>.a{color:red}</style>ok'), 'ok');
+    // leftovers outside any tag
+    assert.equal(cleanPreview('เรือแล่นต่อไป\nsalvage_save\\s*({[\\s\\S]*?})\\s*\n[\\s\\S]*?('), 'เรือแล่นต่อไป');
+    // ordinary prose survives
+    for (const line of ['*She smiles* *and nods* softly.', 'Let me see (just once) — fine.', 'He whispered: "return to me".', '“อย่าไป!” (เธอตะโกน) แล้ววิ่งตาม', 'Price: 5 coins; take it or leave it.']) {
+        assert.equal(cleanPreview(line).length > 10, true, line);
+    }
+});
+
 test('keepLines keeps paragraphs', () => {
     assert.equal(cleanPreview('<p>One.</p><p>Two.</p>', { keepLines: true }), 'One.\nTwo.');
 });

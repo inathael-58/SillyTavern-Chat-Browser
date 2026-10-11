@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.1.1'; // keep in sync with manifest.json
+const VERSION = '1.1.2'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -197,6 +197,7 @@ function normalize(x, rx = t => t) {
         last: toMs(x.last_mes, c.timestampToMoment),
         size: String(x.file_size ?? ''),
         preview,
+        noStory: !preview && count > 0 && !!raw.trim() && !/^\[The (chat|message) is empty\]$/.test(raw),
         persona,
         personaName: persona ? personaName(persona) : '',
         chain: Array.isArray(mh?.chain) ? mh.chain.map(String) : [],
@@ -735,7 +736,8 @@ const ui = {
                     ${persona ? `<span class="cb_persona${persona.locked ? '' : ' cb_soft'}" title="${persona.locked ? 'แชทนี้ผูกกับ persona' : 'persona ที่ผูกกับตัวละครนี้ (แชทนี้ไม่ได้ล็อกไว้)'}: ${esc(persona.name)}"><img src="${esc(thumb('persona', persona.id))}" alt="" loading="lazy">${esc(persona.name)}</span>` : ''}
                     ${isOpen ? '<span class="cb_opentag">เปิดอยู่</span>' : ''}
                 </div>
-                ${preview ? `<div class="cb_preview">${esc(preview)}</div>` : ''}
+                ${preview ? `<div class="cb_preview">${esc(preview)}</div>`
+                    : c.noStory ? '<div class="cb_preview cb_nostory">ข้อความล่าสุดไม่มีบทบรรยาย (หน้าจอเกมหรือข้อมูลระบบ) — กด “ดูข้อความก่อนหน้า”</div>' : ''}
                 ${hist ? this.historyHtml(hist) : ''}
                 ${showParts && !compact && !expanded ? this.chipsHtml(parts, c, cur, false) : ''}
                 ${showParts && expanded ? this.partsListHtml(parts, cur) : ''}
