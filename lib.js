@@ -87,11 +87,12 @@ function stripJson(t) {
     for (let i = 0; i < t.length; i++) {
         const ch = t[i];
         if ((ch === '{' || ch === '[') && /^[{[]\s*["{[]/.test(t.slice(i, i + 12))) {
-            const end = jsonEnd(t, i);
-            const seg = t.slice(i, end < 0 ? t.length : end);
+            let end = jsonEnd(t, i);
+            if (end < 0) { const nl = t.indexOf('\n', i); end = nl < 0 ? t.length : nl; } // cut off: to the end of its line
+            const seg = t.slice(i, end);
             if ((seg.match(JSON_KEY_RE) || []).length >= 2 || (end > 0 && /^\[\s*"/.test(seg) && (seg.match(/"/g) || []).length >= 6)) {
                 out += ' ';
-                i = (end < 0 ? t.length : end) - 1;
+                i = end - 1;
                 continue;
             }
         }
@@ -102,7 +103,7 @@ function stripJson(t) {
 
 /** Leftover script or regex source: symbol-heavy, or with tokens prose never has. */
 function isCodeLine(t) {
-    if (/\\[sSdDwWbn][*+?]?|\[\\s\\S\]|=>|\b(?:function|const|let|var)\s+[\w$]+\s*[=(]|\b(?:document|window|console)\.\w|\)\s*\{|[)}\]];\s*$/.test(t)) return true;
+    if (/\\[sSdDwW][*+?]|\[\\s\\S\]|=>|\b(?:function|const|let|var)\s+[\w$]+\s*[=(]|\b(?:document|window|console)\.\w|\)\s*\{|[)}\]];\s*$/.test(t)) return true;
     const sym = (t.match(/[{}[\]()\\;=<>$|^]/g) || []).length;
     return t.length >= 8 && sym / t.length > 0.2;
 }
@@ -112,7 +113,8 @@ function finish(text, keepLines) {
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/(p|div|blockquote|li)\s*>/gi, '\n')
         .replace(ANY_TAG_RE, '');
-    t = stripJson(decodeEntities(t));
+    // Text that stores line breaks as a literal backslash-n (some cards' scripts do).
+    t = stripJson(decodeEntities(t).replace(/(?:\\r)?\\n/g, '\n'));
     t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')                  // images
         .replace(/\[([^\]]+)\]\((?:https?:|\/)[^)]*\)/g, '$1')    // links → their text
         .replace(/\{\{[^}]*\}\}/g, ' ')                           // unresolved macros
@@ -138,10 +140,11 @@ function finish(text, keepLines) {
 export function cleanPreview(text, { keepLines = false } = {}) {
     let src = String(text ?? '')
         .replace(/<!--[\s\S]*?-->/g, ' ')
-        .replace(/```[\s\S]*?(?:```|$)/g, '\n');
+        .replace(/```[\s\S]*?```/g, '\n')
+        .replace(/^\s*```.*$/gm, '');                 // a fence that never closes: only its marker line
     // Scripts and styles first, whole: their code often holds tag-like strings ('</div>')
     // that would end an outer block early and leave code behind.
-    src = src.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '\n').replace(/<(script|style)\b[\s\S]*$/i, '\n');
+    src = src.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '\n');
     src = src.replace(OPEN_THINK_RE, '');
     const strict = finish(dropRepeated(src, BLOCK_RE), keepLines);
     if (strict) return strict;
@@ -152,7 +155,11 @@ export function cleanPreview(text, { keepLines = false } = {}) {
     const loose = finish(dropRepeated(src, META_BLOCK_RE), keepLines);
     const wrap = src.trim().match(/^<([a-zA-Z][\w:-]*)[^>]*>[\s\S]*<\/\1\s*>$/);
     const custom = wrap && !HTML_TAGS.has(wrap[1].toLowerCase());
-    return custom || loose.length >= 30 ? loose : '';
+    if ((custom && loose) || loose.length >= 30) return loose;
+    // Last resort, as Chat Auto Backup does: every word outside script and markup —
+    // still through the JSON / code / status-line filters.
+    const words = finish(src, keepLines);
+    return words.length >= 30 ? words : '';
 }
 
 /** First `max` characters, cut at a word or sentence end where possible. */

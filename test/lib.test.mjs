@@ -74,6 +74,18 @@ document.querySelector('.salvage').innerHTML = html;
     }
 });
 
+test('one stray marker never wipes the rest of the message', () => {
+    const story = 'คันเร่งหลักถูกดันจมมิดร่อง คอนโซลส่งเสียงหวีดแหลมยาว';
+    assert.equal(cleanPreview('```html\n<div>x</div>\n' + story), story);                       // fence never closed
+    assert.equal(cleanPreview('<script src="a.js">\n' + story), story);                           // script never closed
+    assert.equal(cleanPreview('{"turn":4,"clock":"x\n' + story), story);                         // JSON never closed
+    assert.equal(cleanPreview(story.replace(' ', '\\n')), story);                 // literal \n line breaks
+    // the whole reply inside an HTML wrapper with the state inside too
+    assert.equal(cleanPreview(`<div class="salvage">${story}<details><summary>s</summary>x</details><salvage_save>{"a":1,"b":2}</salvage_save></div>`), story);
+    // …or inside a meta-looking wrapper
+    assert.equal(cleanPreview(`<panel>${story}\n{"a":1,"b":2}</panel>`), story);
+});
+
 test('keepLines keeps paragraphs', () => {
     assert.equal(cleanPreview('<p>One.</p><p>Two.</p>', { keepLines: true }), 'One.\nTwo.');
 });
