@@ -86,6 +86,11 @@ test('one stray marker never wipes the rest of the message', () => {
     assert.equal(cleanPreview(`<panel>${story}\n{"a":1,"b":2}</panel>`), story);
 });
 
+test('a game reply: roll, narration, inner chatter, fenced status JSON', () => {
+    const msg = '<roll>2+4 = 6, +1 (STAT 1) = 7</roll>\n\nThe throttle slams forward and the console shrieks.\n\n*crack — boom!*\n\n"Pillar\'s down," she says.\n\n<Blocks>\n<NPC_Inner_Chatter>\nNoel: "Too slow."\n</NPC_Inner_Chatter>\n</Blocks>\n```status_ui\n{"copilot":"Noel","clock":"5h","stats":{"A":1,"B":0},"hull":[5,6],"log":["HULL 6→5"]}\n```';
+    assert.equal(cleanPreview(msg), 'The throttle slams forward and the console shrieks. crack — boom! "Pillar\'s down," she says.');
+});
+
 test('keepLines keeps paragraphs', () => {
     assert.equal(cleanPreview('<p>One.</p><p>Two.</p>', { keepLines: true }), 'One.\nTwo.');
 });

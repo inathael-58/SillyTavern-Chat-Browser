@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.1.3'; // keep in sync with manifest.json
+const VERSION = '1.1.4'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -111,7 +111,15 @@ function displayRegexer() {
     const ok = s => s && !s.disabled && !s.promptOnly && Array.isArray(s.placement) && !String(s.replaceString ?? '').trim();
     const base = regex.base().filter(ok);
     const byAvatar = new Map();
-    return (text, { avatar = null, user = false, name } = {}) => {
+    // Depth as SillyTavern counts it: 0 = the newest message. Scripts limited to older
+    // messages (minDepth) must not touch the newest one.
+    const inDepth = (s, depth) => {
+        const min = Number(s.minDepth), max = Number(s.maxDepth);
+        if (s.minDepth !== null && s.minDepth !== '' && Number.isFinite(min) && min >= -1 && depth < min) return false;
+        if (s.maxDepth !== null && s.maxDepth !== '' && Number.isFinite(max) && max >= 0 && depth > max) return false;
+        return true;
+    };
+    return (text, { avatar = null, user = false, name, depth = 0 } = {}) => {
         let scripts = base;
         if (avatar) {
             if (!byAvatar.has(avatar)) byAvatar.set(avatar, [...base, ...regex.scoped(avatar).filter(ok)]);
@@ -120,11 +128,23 @@ function displayRegexer() {
         const place = user ? 1 : 2; // USER_INPUT / AI_OUTPUT
         let out = String(text ?? '');
         for (const s of scripts) {
-            if (!s.placement.includes(place)) continue;
+            if (!s.placement.includes(place) || !inDepth(s, depth)) continue;
             try { out = regex.run(s, out, { characterOverride: name }); } catch { /* a broken script: skip it */ }
         }
         return out;
     };
+}
+
+/**
+ * The story text of a message. Hiding scripts run first, but they never get to erase the
+ * story: when their result is empty or far shorter than the message cleaned on its own
+ * (a script matching much more than its status line), the message cleaned on its own wins.
+ */
+function storyOf(text, rx, opts) {
+    const plain = cleanPreview(text, { keepLines: true });
+    let hidden = plain;
+    try { hidden = cleanPreview(rx(text, opts), { keepLines: true }); } catch { /* a broken script */ }
+    return hidden && hidden.length >= plain.length * 0.5 ? hidden : plain;
 }
 
 // ---------------------------------------------------------------- entities
@@ -189,8 +209,9 @@ function normalize(x, rx = t => t) {
     const meta = x.chat_metadata && typeof x.chat_metadata === 'object' ? x.chat_metadata : {};
     const mh = meta.memory_hub;
     const count = Number(x.chat_items) || 0;
-    const raw = rx(String(x.mes ?? ''), { avatar: type === 'character' ? entity : null, name: entityName });
-    const preview = count && !/^\[The (chat|message) is empty\]$/.test(raw) ? clip(cleanPreview(raw, { keepLines: true }).replace(/\n{2,}/g, '\n'), 1200) : '';
+    const raw = String(x.mes ?? '');
+    const preview = count && !/^\[The (chat|message) is empty\]$/.test(raw)
+        ? clip(storyOf(raw, rx, { avatar: type === 'character' ? entity : null, name: entityName }).replace(/\n{2,}/g, '\n'), 1200) : '';
     const persona = typeof meta.persona === 'string' && meta.persona ? meta.persona : null;
     return {
         key: `${type === 'group' ? 'g' : 'c'}:${entity}:${chatId}`,
@@ -1257,14 +1278,16 @@ async function loadHistory(c) {
     ui.render();
     try {
         const arr = await readChat(c);
-        const msgs = arr.filter(m => m && 'mes' in m && !m.is_system).slice(-6);
+        const all = arr.filter(m => m && 'mes' in m);
+        const depthOf = m => all.length - 1 - all.indexOf(m);
+        const msgs = all.filter(m => !m.is_system).slice(-6);
         await loadRegex();
         const rx = displayRegexer();
         const avatar = c.type === 'character' ? c.entity : null;
         ui.history.set(c.key, msgs.map(m => ({
             name: m.name ?? '',
             user: !!m.is_user,
-            text: clip(cleanPreview(rx(m.mes, { avatar: m.is_user ? null : avatar, user: !!m.is_user, name: c.entityName }), { keepLines: true }), 700) || '…',
+            text: clip(storyOf(String(m.mes ?? ''), rx, { avatar: m.is_user ? null : avatar, user: !!m.is_user, name: c.entityName, depth: depthOf(m) }), 700) || '…',
         })));
     } catch (e) {
         ui.history.set(c.key, `โหลดไม่สำเร็จ: ${errText(e)}`);
