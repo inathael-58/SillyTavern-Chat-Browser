@@ -6,7 +6,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Kitima",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "homePage": "https://github.com/inathael-58/SillyTavern-Chat-Browser",
     "auto_update": false,
     "description": "Every chat of every character and group in one list: open in one tap, story chains (Memory Hub), persona, unread counts after sync, pin / rename / delete, and Sync / Clean Sync through Chat Auto Backup."

@@ -47,6 +47,17 @@ test('preset marker lines (§CLK§, [KEY: n] rows) go away', () => {
     assert.equal(cleanPreview('"Hello," she said.\n*She waves.*\n— Then silence.'), '"Hello," she said. She waves. — Then silence.');
 });
 
+test('raw JSON state (whole, cut off, or a fragment) goes away', () => {
+    const state = '{"turn":4,"clock":"เหลือ 5 ชม.","stats":{"CHASSIS":1,"VECTOR":0},"slots":[{"id":"HOLM","state":"ok"},null],"vault":[]}';
+    assert.equal(cleanPreview(`เสียงไซเรนดังขึ้นไกล ๆ "ไปกันเถอะ"\n${state}`), 'เสียงไซเรนดังขึ้นไกล ๆ "ไปกันเถอะ"');
+    assert.equal(cleanPreview(`ฝนตก ${state.slice(0, 60)}`), 'ฝนตก');
+    assert.equal(cleanPreview('…","clock":"เหลือ 5 ชม.","stats":{"CHASSIS":1},"hull":[5,6],"drift":[0,6]\nเรือแล่นต่อไป'), 'เรือแล่นต่อไป');
+    assert.equal(cleanPreview('&#123;&quot;a&quot;:1,&quot;b&quot;:2&#125; ok'), 'ok');
+    // prose with braces or a quoted word followed by a colon stays
+    assert.equal(cleanPreview('She wrote {soon} and said "Wait": then left.'), 'She wrote {soon} and said "Wait": then left.');
+    assert.equal(cleanPreview('["Hello"] she whispered.'), '["Hello"] she whispered.');
+});
+
 test('keepLines keeps paragraphs', () => {
     assert.equal(cleanPreview('<p>One.</p><p>Two.</p>', { keepLines: true }), 'One.\nTwo.');
 });
