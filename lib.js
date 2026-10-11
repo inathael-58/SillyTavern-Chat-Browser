@@ -53,10 +53,49 @@ function isNoiseLine(line) {
     // Preset/regex markers that open a status line: §CLK§ …, ::HUD:: …, ¤STAT¤ …
     if (/^([^\p{L}\p{N}\s*_"'“”‘’()[\]])\1?[\p{L}\d_-]{2,24}\1\1?(?=\s|$)/u.test(t)) return true;
     if ((t.match(/\[[\p{Lu}\d_ ]{2,}\s*[:：][^\]]*\]/gu) || []).length >= 2) return true; // [DYNAMISM: 2] [TENSION: 1]
+    if ((t.match(JSON_KEY_RE) || []).length >= 3) return true;                       // a piece of JSON: …","clock":"…","stats":
     if (/^\(\(.*\)\)$/.test(t) || /^\(?\s*OOC\s*[:：]/i.test(t)) return true;          // ((ooc)) / OOC: …
     if (/^[^\s:：]{1,24}\s*[:：]\s*[\d.,/%+-]+\s*$/.test(t)) return true;              // "HP: 80/100"
     if (/^[\p{Extended_Pictographic}\s|·•:：\d/%.,+-]+$/u.test(t) && /\p{Extended_Pictographic}/u.test(t)) return true; // emoji-only stat rows
     return false;
+}
+
+/** End of the JSON value opening at i (index after its closing bracket), or -1 if it never closes. */
+function jsonEnd(t, i) {
+    let depth = 0;
+    for (let k = i; k < t.length; k++) {
+        const ch = t[k];
+        if (ch === '"') {
+            for (k++; k < t.length && t[k] !== '"'; k++) if (t[k] === '\\') k++;
+        } else if (ch === '{' || ch === '[') depth++;
+        else if (ch === '}' || ch === ']') { depth--; if (depth === 0) return k + 1; }
+    }
+    return -1;
+}
+
+const JSON_KEY_RE = /"[^"\n]{1,48}"\s*:/g;
+
+/**
+ * Game cards and trackers often write their state into the message as raw JSON
+ * ({"clock":"…","stats":{…}}). Remove every object or array that carries keys —
+ * also one cut off at the end of the message.
+ */
+function stripJson(t) {
+    let out = '';
+    for (let i = 0; i < t.length; i++) {
+        const ch = t[i];
+        if ((ch === '{' || ch === '[') && /^[{[]\s*["{[]/.test(t.slice(i, i + 12))) {
+            const end = jsonEnd(t, i);
+            const seg = t.slice(i, end < 0 ? t.length : end);
+            if ((seg.match(JSON_KEY_RE) || []).length >= 2 || (end > 0 && /^\[\s*"/.test(seg) && (seg.match(/"/g) || []).length >= 6)) {
+                out += ' ';
+                i = (end < 0 ? t.length : end) - 1;
+                continue;
+            }
+        }
+        out += ch;
+    }
+    return out;
 }
 
 function finish(text, keepLines) {
@@ -64,7 +103,7 @@ function finish(text, keepLines) {
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<\/(p|div|blockquote|li)\s*>/gi, '\n')
         .replace(ANY_TAG_RE, '');
-    t = decodeEntities(t);
+    t = stripJson(decodeEntities(t));
     t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')                  // images
         .replace(/\[([^\]]+)\]\((?:https?:|\/)[^)]*\)/g, '$1')    // links → their text
         .replace(/\{\{[^}]*\}\}/g, ' ')                           // unresolved macros
