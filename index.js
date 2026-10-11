@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.1.4'; // keep in sync with manifest.json
+const VERSION = '1.1.5'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -891,6 +891,7 @@ function chatFromRow(row) {
 
 function openBrowser() {
     if (ui.root) { ui.root.querySelector('.cb_search')?.focus(); return; }
+    ui.query = '';
     loadCache();
     importStPins();
     const s = settings();
@@ -947,6 +948,7 @@ function closeBrowser() {
     const root = ui.root;
     if (!root) return;
     ui.root = null;
+    ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
     ui.observer = null;
     ui.selecting = false;
@@ -990,7 +992,10 @@ function wireBrowser(root) {
     search.addEventListener('input', () => {
         clearq.hidden = !search.value;
         clearTimeout(qTimer);
-        qTimer = setTimeout(() => { ui.query = search.value; ui.render(); list.scrollTop = 0; }, 120);
+        qTimer = setTimeout(() => {
+            if (ui.root !== root) return;   // closed before the debounce fired
+            ui.query = search.value; ui.render(); list.scrollTop = 0;
+        }, 120);
     });
     clearq.addEventListener('click', e => { e.preventDefault(); search.value = ''; clearq.hidden = true; ui.query = ''; ui.render(); search.focus(); });
 
