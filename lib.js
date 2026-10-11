@@ -22,6 +22,7 @@ const BLOCK_RE = new RegExp(`<(?!(?:${inlineAlt})(?=[\\s/>]))([a-zA-Z][\\w:-]*)(
 const META_BLOCK_RE = new RegExp(`<(${META_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
 // An opening reasoning tag that never closes (a cut-off reply): everything after it is reasoning.
 const OPEN_THINK_RE = /<(think|thinking|thought|reasoning|analysis)(?:\s[^>]*)?>(?![\s\S]*<\/\1\s*>)[\s\S]*$/i;
+const HTML_TAGS = new Set(['div', 'section', 'article', 'aside', 'main', 'header', 'footer', 'nav', 'table', 'ul', 'ol', 'li', 'p', 'span', 'details', 'figure', 'form', 'html', 'body', 'center', 'font', 'blockquote']);
 const ANY_TAG_RE = /<\/?[a-zA-Z][^>]*>/g;
 
 function decodeEntities(t) {
@@ -54,6 +55,7 @@ function isNoiseLine(line) {
     if (/^([^\p{L}\p{N}\s*_"'“”‘’()[\]])\1?[\p{L}\d_-]{2,24}\1\1?(?=\s|$)/u.test(t)) return true;
     if ((t.match(/\[[\p{Lu}\d_ ]{2,}\s*[:：][^\]]*\]/gu) || []).length >= 2) return true; // [DYNAMISM: 2] [TENSION: 1]
     if ((t.match(JSON_KEY_RE) || []).length >= 3) return true;                       // a piece of JSON: …","clock":"…","stats":
+    if (isCodeLine(t)) return true;
     if (/^\(\(.*\)\)$/.test(t) || /^\(?\s*OOC\s*[:：]/i.test(t)) return true;          // ((ooc)) / OOC: …
     if (/^[^\s:：]{1,24}\s*[:：]\s*[\d.,/%+-]+\s*$/.test(t)) return true;              // "HP: 80/100"
     if (/^[\p{Extended_Pictographic}\s|·•:：\d/%.,+-]+$/u.test(t) && /\p{Extended_Pictographic}/u.test(t)) return true; // emoji-only stat rows
@@ -98,6 +100,13 @@ function stripJson(t) {
     return out;
 }
 
+/** Leftover script or regex source: symbol-heavy, or with tokens prose never has. */
+function isCodeLine(t) {
+    if (/\\[sSdDwWbn][*+?]?|\[\\s\\S\]|=>|\b(?:function|const|let|var)\s+[\w$]+\s*[=(]|\b(?:document|window|console)\.\w|\)\s*\{|[)}\]];\s*$/.test(t)) return true;
+    const sym = (t.match(/[{}[\]()\\;=<>$|^]/g) || []).length;
+    return t.length >= 8 && sym / t.length > 0.2;
+}
+
 function finish(text, keepLines) {
     let t = text
         .replace(/<br\s*\/?>/gi, '\n')
@@ -130,12 +139,20 @@ export function cleanPreview(text, { keepLines = false } = {}) {
     let src = String(text ?? '')
         .replace(/<!--[\s\S]*?-->/g, ' ')
         .replace(/```[\s\S]*?(?:```|$)/g, '\n');
+    // Scripts and styles first, whole: their code often holds tag-like strings ('</div>')
+    // that would end an outer block early and leave code behind.
+    src = src.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '\n').replace(/<(script|style)\b[\s\S]*$/i, '\n');
     src = src.replace(OPEN_THINK_RE, '');
     const strict = finish(dropRepeated(src, BLOCK_RE), keepLines);
     if (strict) return strict;
     // The whole reply sits inside one custom tag (<response>…</response>): keep its words,
     // still without the blocks that are never story.
-    return finish(dropRepeated(src, META_BLOCK_RE), keepLines);
+    // Only for a reply wrapped in a custom tag, or text long enough to read as story —
+    // not the leftover labels of an HTML widget ("HP 3").
+    const loose = finish(dropRepeated(src, META_BLOCK_RE), keepLines);
+    const wrap = src.trim().match(/^<([a-zA-Z][\w:-]*)[^>]*>[\s\S]*<\/\1\s*>$/);
+    const custom = wrap && !HTML_TAGS.has(wrap[1].toLowerCase());
+    return custom || loose.length >= 30 ? loose : '';
 }
 
 /** First `max` characters, cut at a word or sentence end where possible. */

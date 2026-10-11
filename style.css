@@ -1158,3 +1158,5 @@
 .cb_look_checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
 .cb_look [hidden] { display: none !important; }
 .cb_root[data-view="compact"] .cb_row:has(.cb_partlist) .cb_side { align-self: start; }
+.cb_preview.cb_nostory { font-style: italic; color: var(--cb-muted); font-size: 0.8em; }
+.cb_root[data-view="detail"] .cb_preview.cb_nostory { border-left-style: dashed; }
