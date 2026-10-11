@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.0.1'; // keep in sync with manifest.json
+const VERSION = '1.1.0'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -25,6 +25,7 @@ const DEFAULTS = Object.freeze({
     pinsImported: false, // SillyTavern's own pinned chats copied in once
     launcher: true,      // floating button
     launcherPos: Object.freeze({ x: 0, y: 0.72, edge: 'left' }),
+    launcherLook: null,  // filled from LOOK_DEFAULT
     topbar: true,        // icon in the top bar
 });
 
@@ -714,7 +715,8 @@ const ui = {
         const branchOf = c.mainChat && c.mainChat !== c.chatId ? c.mainChat : '';
         const expanded = this.expanded.has(c.key);
         const parts = e.story?.parts ?? [];
-        const showParts = parts.length > 1 && (s.view !== 'compact' || expanded);
+        const showParts = parts.length > 1;
+        const compact = s.view === 'compact';
         const hist = this.history.get(c.key);
         return `<div class="cb_row${isOpen ? ' cb_isopen' : ''}${e.unread ? ' cb_unread' : ''}${selected ? ' cb_selected' : ''}" data-key="${esc(c.key)}" role="listitem" tabindex="0">
             <span class="cb_check"><i class="fa-solid fa-check"></i></span>
@@ -722,7 +724,9 @@ const ui = {
             <div class="cb_main">
                 <div class="cb_l1">
                     <span class="cb_name" title="${esc(c.chatId)}">${pinned ? '<i class="fa-solid fa-thumbtack cb_pin"></i>' : ''}${esc(c.chatId)}</span>
-                    ${part ? `<span class="cb_pill cb_part" title="${e.story ? `เรื่องต่อเนื่อง ${parts.length} แชท · รวม ${e.story.total} ข้อความ` : 'ภาคต่อของแชทก่อนหน้า (แชทก่อนหน้าถูกลบหรือเปลี่ยนชื่อแล้ว)'}"><i class="fa-solid fa-link"></i>ภาค ${part}${e.story && s.view === 'compact' ? `/${parts.length}` : ''}</span>` : ''}
+                    ${part && e.story && !compact ? `<button class="cb_pill cb_part cb_partsbtn${expanded ? ' cb_on' : ''}" data-parts="1" title="เรื่องต่อเนื่อง ${parts.length} แชท · รวม ${e.story.total} ข้อความ — แตะเพื่อดูทุกภาค"><i class="fa-solid fa-link"></i>ภาค ${part}/${parts.length}<i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'} cb_pchev"></i></button>`
+                        : part && !e.story ? '<span class="cb_pill cb_part" title="ภาคต่อของแชทก่อนหน้า (แชทก่อนหน้าถูกลบหรือเปลี่ยนชื่อแล้ว)"><i class="fa-solid fa-link"></i>ภาค ' + part + '</span>' : ''}
+                    ${showParts && compact ? this.chipsHtml(parts, c, cur, true) : ''}
                     ${branchOf ? `<span class="cb_pill cb_branch" title="แตกกิ่งมาจาก ${esc(branchOf)}"><i class="fa-solid fa-code-branch"></i>กิ่ง</span>` : ''}
                     <span class="cb_time" title="${esc(fullTime(c.last))}">${esc(relTime(c.last))}</span>
                 </div>
@@ -733,11 +737,8 @@ const ui = {
                 </div>
                 ${preview ? `<div class="cb_preview">${esc(preview)}</div>` : ''}
                 ${hist ? this.historyHtml(hist) : ''}
-                ${showParts ? `<div class="cb_parts">${parts.map(p => {
-                    const pp = linkInfo.get(p.key)?.part ?? 1;
-                    const u = unreadOf(p);
-                    return `<button class="cb_partchip${p.key === c.key ? ' cb_on' : ''}${p.key === cur ? ' cb_cur' : ''}" data-open="${esc(p.key)}" title="${esc(p.chatId)} · ${p.count} ข้อความ · ${esc(relTime(p.last))}">ภาค ${pp}${u ? `<b>+${u}</b>` : ''}</button>`;
-                }).join('<i class="fa-solid fa-angle-right cb_partsep"></i>')}</div>` : ''}
+                ${showParts && !compact && !expanded ? this.chipsHtml(parts, c, cur, false) : ''}
+                ${showParts && expanded ? this.partsListHtml(parts, cur) : ''}
                 <div class="cb_meta">
                     <span><i class="fa-regular fa-message"></i>${c.count} ข้อความ${e.story ? ` · ทั้งเรื่อง ${e.story.total}` : ''}</span>
                     ${c.size ? `<span><i class="fa-regular fa-file"></i>${esc(c.size)}</span>` : ''}
@@ -749,10 +750,36 @@ const ui = {
             <div class="cb_side">
                 ${e.unread ? `<span class="cb_badge" title="ข้อความใหม่ตั้งแต่เปิดแชทนี้ครั้งล่าสุดในเครื่องนี้">+${e.unread > 999 ? '999' : e.unread}</span>` : ''}
                 ${db ? `<span class="cb_cloudmini">${db}</span>` : ''}
-                ${parts.length > 1 && s.view === 'compact' ? `<button class="cb_iconbtn cb_expand" title="${expanded ? 'ซ่อน' : 'ดู'}ภาคก่อนหน้า"><i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'}"></i></button>` : ''}
                 <button class="cb_iconbtn cb_more" title="ตัวเลือก" aria-label="ตัวเลือก"><i class="fa-solid fa-ellipsis-vertical"></i></button>
             </div>
         </div>`;
+    },
+
+    /** One button per part of the story; tap opens that part. */
+    chipsHtml(parts, head, cur, short) {
+        // Compact rows keep to one line: the last three parts, plus a button for the full list.
+        const hidden = short && parts.length > 3 ? parts.length - 3 : 0;
+        const shown = hidden ? parts.slice(-3) : parts;
+        const more = short ? `<button class="cb_partchip cb_partsbtn${this.expanded.has(head.key) ? ' cb_on' : ''}" data-parts="1" title="ทุกภาค (${parts.length})">${hidden ? `+${hidden}` : '<i class="fa-solid fa-link"></i>'}</button>` : '';
+        return `<div class="cb_parts${short ? ' cb_parts_inline' : ''}">${more}${shown.map(p => {
+            const pp = linkInfo.get(p.key)?.part ?? 1;
+            const u = unreadOf(p);
+            return `<button class="cb_partchip${p.key === head.key ? ' cb_on' : ''}${p.key === cur ? ' cb_cur' : ''}" data-open="${esc(p.key)}" title="ภาค ${pp}: ${esc(p.chatId)} · ${p.count} ข้อความ · ${esc(relTime(p.last))}">${short ? '' : 'ภาค '}${pp}${u ? `<b>+${u}</b>` : ''}</button>`;
+        }).join(short ? '' : '<i class="fa-solid fa-angle-right cb_partsep"></i>')}</div>`;
+    },
+
+    /** Every part with its name, size and age, newest first; tap opens it. */
+    partsListHtml(parts, cur) {
+        return `<div class="cb_partlist">${[...parts].reverse().map(p => {
+            const pp = linkInfo.get(p.key)?.part ?? 1;
+            const u = unreadOf(p);
+            return `<button class="cb_partrow${p.key === cur ? ' cb_cur' : ''}" data-open="${esc(p.key)}">
+                <span class="cb_pnum">${pp}</span>
+                <span class="cb_pmain"><b>${esc(p.chatId)}</b><small>${p.count} ข้อความ · ${esc(relTime(p.last))}${p.key === cur ? ' · เปิดอยู่' : ''}</small></span>
+                ${u ? `<span class="cb_badge">+${u}</span>` : ''}
+                <i class="fa-solid fa-chevron-right cb_pgo"></i>
+            </button>`;
+        }).join('')}</div>`;
     },
 
     cloudHtml(c) {
@@ -991,7 +1018,7 @@ function wireBrowser(root) {
         const c = chatFromRow(row);
         if (!c) return;
         if (t.closest('.cb_more')) { e.stopPropagation(); openMenu(c, t.closest('.cb_more')); return; }
-        if (t.closest('.cb_expand')) { if (ui.expanded.has(c.key)) ui.expanded.delete(c.key); else ui.expanded.add(c.key); ui.render(); return; }
+        if (t.closest('[data-parts]')) { if (ui.expanded.has(c.key)) ui.expanded.delete(c.key); else ui.expanded.add(c.key); ui.render(); return; }
         if (t.closest('[data-hist]')) { loadHistory(c); return; }
         const part = t.closest('[data-open]');
         if (part) { if (!ui.selecting) doOpen(data.byKey.get(part.dataset.open)); return; }
@@ -1117,6 +1144,7 @@ function openMenu(c, anchor) {
     const isOpen = c.key === currentKey();
     const items = [
         ['open', isOpen ? 'fa-solid fa-eye' : 'fa-solid fa-arrow-right-to-bracket', isOpen ? 'กลับไปที่แชทนี้' : 'เปิดแชทนี้'],
+        ...(info?.size > 1 ? info.parts.filter(p => p.key !== c.key).reverse().map(p => [`part:${p.key}`, 'fa-solid fa-book-bookmark', `เปิดภาค ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId}`]) : []),
         ['pin', 'fa-solid fa-thumbtack', pinned ? 'เลิกปักหมุด' : 'ปักหมุด'],
         ['rename', 'fa-solid fa-pen', 'เปลี่ยนชื่อ'],
         ['read', 'fa-solid fa-check-double', 'ทำเครื่องหมายว่าอ่านแล้ว', unreadOf(c) > 0],
@@ -1129,7 +1157,7 @@ function openMenu(c, anchor) {
     menu.className = 'cb_menu';
     menu.setAttribute('role', 'menu');
     menu.innerHTML = `<div class="cb_menuhead"><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${info?.size > 1 ? ` · ภาค ${info.part} จาก ${info.size} แชท` : ''}</span></div>`
-        + items.map(([id, icon, label, , danger]) => `<button role="menuitem" data-act="${id}"${danger ? ' class="cb_danger"' : ''}><i class="${icon}"></i>${esc(label)}</button>`).join('');
+        + items.map(([id, icon, label, , danger]) => `<button role="menuitem" data-act="${esc(id)}"${danger ? ' class="cb_danger"' : ''}><i class="${icon}"></i>${esc(label)}</button>`).join('');
     layer.append(menu);
     const close = () => { menu.remove(); document.removeEventListener('pointerdown', outside, true); };
     const outside = e => { if (!menu.contains(e.target)) close(); };
@@ -1160,6 +1188,7 @@ function openMenu(c, anchor) {
 
 async function menuAction(act, c) {
     if (act === 'open') return doOpen(c);
+    if (act.startsWith('part:')) return doOpen(data.byKey.get(act.slice(5)));
     if (act === 'pin') { togglePin([c.key], !settings().pins[c.key]); ui.render(); return; }
     if (act === 'read') { markSeen(c.key, c.count); ui.render(); updateLauncherBadge(); return; }
     if (act === 'only') { ui.entity = `${c.type}|${c.entity}`; ui.render(); return; }
@@ -1523,14 +1552,122 @@ function showCleanHistory(api) {
     api.setButtons([{ label: 'ปิด', primary: true, run: x => x.close(null) }]);
 }
 
+// ---------------------------------------------------------------- launcher look
+//
+// The floating button is a decoration as much as a button: a shape (or a mask such as a
+// heart or a star, or no shape at all for a sticker), an icon, an emoji or a picture,
+// colours from the theme or picked, a size, and an idle animation.
+
+const LOOK_DEFAULT = Object.freeze({
+    shape: 'circle',    // circle squircle bubble pill heart flower star cloud sticker
+    icon: 'fa-comments',
+    emoji: '',          // overrides the icon
+    image: '',          // data: URL or link; overrides icon and emoji
+    fit: 'cover',       // cover | contain
+    size: 46,
+    iconSize: 42,       // % of the button
+    bg: 'theme',        // theme | custom | none
+    bgColor: '#2a2633',
+    fg: 'theme',        // theme | custom
+    fgColor: '#ffd38a',
+    border: true,
+    shadow: true,
+    anim: 'none',       // none float sway pulse spin glow nudge
+    opacity: 100,
+    label: 'แชท',       // pill only
+    badge: true,
+});
+
+const svgMask = d => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>${d}</svg>`)}")`;
+const MASKS = {
+    heart: { mask: svgMask("<path d='M50 90C22 70 3 53 3 31 3 15 15 4 29 4c9 0 17 5 21 13 4-8 12-13 21-13 14 0 26 11 26 27 0 22-19 39-47 59z'/>"), nudge: '-6%' },
+    star: { mask: svgMask("<path d='M50 3l13.6 30.2 32.9 3.6-24.6 22.2 7 32.4L50 75 21.1 91.4l7-32.4L3.5 36.8l32.9-3.6z' stroke='black' stroke-width='5' stroke-linejoin='round'/>"), nudge: '5%' },
+    flower: { mask: svgMask(`${[0, 45, 90, 135, 180, 225, 270, 315].map(a => `<circle cx='${(50 + 30 * Math.cos(a * Math.PI / 180)).toFixed(1)}' cy='${(50 + 30 * Math.sin(a * Math.PI / 180)).toFixed(1)}' r='20'/>`).join('')}<circle cx='50' cy='50' r='34'/>`), nudge: '0' },
+    cloud: { mask: svgMask("<path d='M27 84C13 84 3 74 3 61c0-12 9-22 21-23 2-17 15-29 31-29 13 0 24 8 29 20 9 2 16 10 16 21 0 19-13 34-32 34z'/>"), nudge: '4%' },
+};
+const SHAPES = [
+    ['circle', 'วงกลม'], ['squircle', 'มนเหลี่ยม'], ['bubble', 'บับเบิลแชท'], ['pill', 'แคปซูล + ข้อความ'],
+    ['heart', 'หัวใจ'], ['flower', 'ดอกไม้'], ['star', 'ดาว'], ['cloud', 'ก้อนเมฆ'], ['sticker', 'สติกเกอร์ (ไม่มีพื้น)'],
+];
+const LOOK_ICONS = ['fa-comments', 'fa-comment-dots', 'fa-book-open', 'fa-scroll', 'fa-feather-pointed', 'fa-heart', 'fa-star', 'fa-moon',
+    'fa-cat', 'fa-paw', 'fa-ghost', 'fa-dragon', 'fa-crown', 'fa-wand-magic-sparkles', 'fa-envelope', 'fa-mug-hot', 'fa-music', 'fa-seedling'];
+const ANIMS = [['none', 'นิ่ง'], ['float', 'ลอยขึ้นลง'], ['sway', 'โยกเบา ๆ'], ['pulse', 'เต้นตุบ ๆ'], ['spin', 'หมุนช้า ๆ'], ['glow', 'เรืองแสง'], ['nudge', 'ดุ๊กดิ๊กเมื่อมีข้อความใหม่']];
+const LOOK_PRESETS = [
+    ['คลาสสิก', {}],
+    ['หัวใจ', { shape: 'heart', icon: 'fa-comment-dots', bg: 'custom', bgColor: '#f06292', fg: 'custom', fgColor: '#ffffff', border: false, anim: 'pulse', size: 52 }],
+    ['ดาวเรือง', { shape: 'star', icon: 'fa-moon', bg: 'custom', bgColor: '#f5c451', fg: 'custom', fgColor: '#4a3200', border: false, anim: 'glow', size: 56, iconSize: 34 }],
+    ['ดอกไม้', { shape: 'flower', icon: 'fa-seedling', bg: 'custom', bgColor: '#b7e4c7', fg: 'custom', fgColor: '#2d6a4f', border: false, anim: 'sway', size: 54 }],
+    ['บับเบิล', { shape: 'bubble', icon: 'fa-comments', anim: 'float' }],
+    ['แคปซูล', { shape: 'pill', icon: 'fa-book-open', label: 'แชท', size: 40, iconSize: 45 }],
+    ['ก้อนเมฆ', { shape: 'cloud', icon: 'fa-envelope', bg: 'custom', bgColor: '#e8eefc', fg: 'custom', fgColor: '#5468a8', border: false, anim: 'float', size: 58, iconSize: 32 }],
+    ['สติกเกอร์', { shape: 'sticker', emoji: '💌', anim: 'nudge', size: 52 }],
+];
+
+function look() {
+    const s = settings();
+    s.launcherLook = { ...LOOK_DEFAULT, ...(s.launcherLook && typeof s.launcherLook === 'object' ? s.launcherLook : {}) };
+    return s.launcherLook;
+}
+
+/** Draw the button (the real one or the preview) from a look. */
+function applyLook(el, L = look()) {
+    const mask = MASKS[L.shape];
+    el.dataset.shape = SHAPES.some(x => x[0] === L.shape) ? L.shape : 'circle';
+    el.dataset.masked = mask ? '1' : '';
+    el.dataset.anim = L.anim;
+    el.dataset.fit = L.fit;
+    el.dataset.border = L.border && !mask && L.shape !== 'sticker' && L.bg !== 'none' ? '1' : '';
+    el.dataset.shadow = L.shadow ? '1' : '';
+    const size = clamp(Number(L.size) || 46, 24, 160);
+    el.style.setProperty('--cb-lsize', `${size}px`);
+    el.style.setProperty('--cb-licon', `${Math.round(size * clamp(Number(L.iconSize) || 42, 20, 100) / 100)}px`);
+    el.style.setProperty('--cb-lop', String(clamp(Number(L.opacity) || 100, 20, 100) / 100));
+    if (L.bg === 'custom') el.style.setProperty('--cb-lbg', L.bgColor);
+    else if (L.bg === 'none') el.style.setProperty('--cb-lbg', 'transparent');
+    else el.style.removeProperty('--cb-lbg');
+    if (L.fg === 'custom') el.style.setProperty('--cb-lfg', L.fgColor); else el.style.removeProperty('--cb-lfg');
+    if (mask) { el.style.setProperty('--cb-lmask', mask.mask); el.style.setProperty('--cb-lnudge', mask.nudge); }
+    let inner = el.querySelector('.cb_lshape');
+    if (!inner) {
+        inner = document.createElement('div');
+        inner.className = 'cb_lshape';
+        el.prepend(inner);
+    }
+    const label = L.shape === 'pill' && String(L.label ?? '').trim() ? `<span class="cb_llabel">${esc(L.label)}</span>` : '';
+    const face = L.image ? `<img class="cb_limg" src="${esc(L.image)}" alt="" draggable="false">`
+        : String(L.emoji ?? '').trim() ? `<span class="cb_lemoji">${esc(String(L.emoji).trim().slice(0, 8))}</span>`
+        : `<i class="fa-solid ${esc(/^fa-[\w-]+$/.test(L.icon) ? L.icon : 'fa-comments')} cb_licon"></i>`;
+    inner.innerHTML = face + label;
+    if (!el.querySelector('.cb_launch_badge')) el.insertAdjacentHTML('beforeend', '<span class="cb_launch_badge" hidden></span>');
+    el.classList.toggle('cb_nobadge', !L.badge);
+}
+
+/** A picture for the button: small images (and GIFs) as they are, bigger ones scaled down. */
+async function imageToDataUrl(file) {
+    const read = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(f); });
+    if (file.size <= 160_000 || (file.type === 'image/gif' && file.size <= 500_000)) return await read(file);
+    if (file.type === 'image/gif') throw new Error('GIF ใหญ่เกิน 500 KB');
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * k);
+    canvas.height = Math.round(bmp.height * k);
+    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const webp = canvas.toDataURL('image/webp', 0.9);
+    return webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png');
+}
+
 // ---------------------------------------------------------------- launcher button & entry points
 
 function updateLauncherBadge() {
     const n = totalUnread();
     for (const el of document.querySelectorAll('.cb_launch_badge')) {
+        if (el.closest('.cb_look_stage')) continue; // the preview shows a sample number
         el.textContent = n > 99 ? '99+' : String(n);
-        el.hidden = !n;
+        el.hidden = !n || !!el.closest('.cb_nobadge');
     }
+    const btn = document.getElementById('cb_launcher');
+    if (btn) btn.dataset.unread = n ? '1' : '';
 }
 
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
@@ -1549,6 +1686,7 @@ function placeLauncher(el = document.getElementById('cb_launcher')) {
     if (p.edge === 'bottom') top = vh - h - m;
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${Math.round(top)}px`;
+    el.dataset.edge = p.edge ?? '';
 }
 
 function renderLauncher() {
@@ -1557,10 +1695,11 @@ function renderLauncher() {
     if (el) return;
     el = document.createElement('div');
     el.id = 'cb_launcher';
+    el.className = 'cb_launch';
     el.setAttribute('role', 'button');
     el.tabIndex = 0;
     el.title = 'Chat Browser — แชททั้งหมด';
-    el.innerHTML = '<i class="fa-solid fa-comments"></i><span class="cb_launch_badge" hidden></span>';
+    applyLook(el);
     document.body.append(el);
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrowser(); } });
 
@@ -1651,6 +1790,10 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Chat Browser</div></div>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_launcher"> ปุ่มลอยบนจอ (ลากไปวางตรงไหนก็ได้ หรือเก็บเข้า Quick Dock)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_topbar"> ไอคอนบนแถบด้านบน</label>
+                <details class="cb_look">
+                    <summary>หน้าตาปุ่มลอย</summary>
+                    <div id="cb_look_body"></div>
+                </details>
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
@@ -1666,6 +1809,7 @@ function renderSettingsPanel() {
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
     $('cb_set_open').addEventListener('click', () => openBrowser());
     $('cb_set_resetpos').addEventListener('click', () => { s.launcherPos = { ...DEFAULTS.launcherPos }; saveSettings(); if (!s.launcher) { s.launcher = true; $('cb_set_launcher').checked = true; renderLauncher(); } placeLauncher(); });
+    renderLookEditor($('cb_look_body'));
     $('cb_set_readall').addEventListener('click', async () => {
         if (!data.at) await reload();
         for (const c of data.chats) seen.map[c.key] = c.count;
@@ -1674,6 +1818,123 @@ function renderSettingsPanel() {
         ui.render();
         toast.ok('ทุกแชทอ่านแล้ว');
     });
+}
+
+/** The look editor in the Extensions panel: every change shows on the real button and the preview at once. */
+function renderLookEditor(box) {
+    if (!box) return;
+    const L = look();
+    const opt = (list, cur) => list.map(([v, t]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`).join('');
+    box.innerHTML = `
+        <div class="cb_look_top">
+            <div class="cb_look_stage"><div class="cb_launch" id="cb_look_preview"></div></div>
+            <div>
+                <span class="cb_look_label" style="margin-top:0">สไตล์สำเร็จรูป</span>
+                <div class="cb_look_presets">${LOOK_PRESETS.map(([n], i) => `<div class="menu_button" data-preset="${i}">${esc(n)}</div>`).join('')}</div>
+            </div>
+        </div>
+        <span class="cb_look_label">รูปทรง</span>
+        <div class="cb_look_grid" data-group="shape">${SHAPES.map(([v, t]) => `<button type="button" data-v="${v}" title="${esc(t)}" class="${L.shape === v ? 'cb_on' : ''}">${shapeSwatch(v)}</button>`).join('')}</div>
+        <span class="cb_look_label">ไอคอน (หรือพิมพ์อีโมจิ / ใช้รูป ด้านล่าง)</span>
+        <div class="cb_look_grid" data-group="icon">${LOOK_ICONS.map(v => `<button type="button" data-v="${v}" class="${!L.emoji && !L.image && L.icon === v ? 'cb_on' : ''}"><i class="fa-solid ${v}"></i></button>`).join('')}</div>
+        <div class="cb_look_rows">
+            <span>อีโมจิ</span><input type="text" class="text_pole" data-k="emoji" maxlength="8" placeholder="เช่น 💌 🐱 ✨" value="${esc(L.emoji)}">
+            <span>รูปภาพ</span>
+            <div class="cb_look_imgbtns">
+                <div class="menu_button" data-img="upload"><i class="fa-solid fa-image"></i> เลือกรูป</div>
+                <div class="menu_button" data-img="url"><i class="fa-solid fa-link"></i> ลิงก์รูป</div>
+                <div class="menu_button" data-img="clear"${L.image ? '' : ' hidden'}><i class="fa-solid fa-xmark"></i> เอารูปออก</div>
+                <select class="text_pole" data-k="fit" style="width:auto"${L.image ? '' : ' hidden'}>${opt([['cover', 'เต็มกรอบ'], ['contain', 'ทั้งรูป']], L.fit)}</select>
+                <input type="file" accept="image/*" hidden>
+            </div>
+            <span>ข้อความ</span><input type="text" class="text_pole" data-k="label" maxlength="16" value="${esc(L.label)}" title="แสดงเมื่อเลือกรูปทรงแคปซูล">
+            <span>ขนาด</span><input type="range" data-k="size" min="28" max="140" step="1" value="${L.size}">
+            <span>ไอคอน</span><input type="range" data-k="iconSize" min="20" max="100" step="1" value="${L.iconSize}">
+            <span>ความทึบ</span><input type="range" data-k="opacity" min="20" max="100" step="5" value="${L.opacity}" title="ตอนไม่ได้แตะ — แตะหรือชี้แล้วชัดเต็ม">
+            <span>พื้น</span>
+            <div class="cb_look_inline"><select class="text_pole" data-k="bg" style="width:auto">${opt([['theme', 'สีธีม'], ['custom', 'เลือกสี'], ['none', 'โปร่งใส']], L.bg)}</select><input type="color" data-k="bgColor" value="${esc(L.bgColor)}"></div>
+            <span>สีไอคอน</span>
+            <div class="cb_look_inline"><select class="text_pole" data-k="fg" style="width:auto">${opt([['theme', 'สีธีม (Quote)'], ['custom', 'เลือกสี']], L.fg)}</select><input type="color" data-k="fgColor" value="${esc(L.fgColor)}"></div>
+            <span>เคลื่อนไหว</span><select class="text_pole" data-k="anim">${opt(ANIMS, L.anim)}</select>
+        </div>
+        <div class="cb_look_checks">
+            <label class="checkbox_label"><input type="checkbox" data-k="border"${L.border ? ' checked' : ''}> ขอบ</label>
+            <label class="checkbox_label"><input type="checkbox" data-k="shadow"${L.shadow ? ' checked' : ''}> เงา</label>
+            <label class="checkbox_label"><input type="checkbox" data-k="badge"${L.badge ? ' checked' : ''}> ตัวเลขข้อความใหม่</label>
+        </div>
+        <div class="cb_setbtns"><div class="menu_button" data-reset="1"><i class="fa-solid fa-rotate-left"></i> กลับเป็นแบบเดิม</div></div>`;
+
+    const preview = box.querySelector('#cb_look_preview');
+    const refresh = () => {
+        const cur = look();
+        applyLook(preview, cur);
+        const pb = preview.querySelector('.cb_launch_badge');
+        pb.textContent = '3';
+        pb.hidden = !cur.badge;
+        const real = document.getElementById('cb_launcher');
+        if (real) { applyLook(real, cur); placeLauncher(real); updateLauncherBadge(); }
+        box.querySelectorAll('[data-group="shape"] button').forEach(b => b.classList.toggle('cb_on', b.dataset.v === cur.shape));
+        box.querySelectorAll('[data-group="icon"] button').forEach(b => b.classList.toggle('cb_on', !cur.emoji && !cur.image && b.dataset.v === cur.icon));
+        box.querySelector('[data-img="clear"]').hidden = !cur.image;
+        box.querySelector('[data-k="fit"]').hidden = !cur.image;
+        box.querySelector('[data-k="bgColor"]').hidden = cur.bg !== 'custom';
+        box.querySelector('[data-k="fgColor"]').hidden = cur.fg !== 'custom';
+    };
+    const set = patch => { Object.assign(look(), patch); saveSettings(); refresh(); };
+    const sync = () => {
+        const cur = look();
+        for (const el of box.querySelectorAll('[data-k]')) {
+            const k = el.dataset.k;
+            if (el.type === 'checkbox') el.checked = !!cur[k]; else el.value = cur[k] ?? '';
+        }
+        refresh();
+    };
+
+    box.addEventListener('click', async e => {
+        const b = e.target.closest('button, .menu_button');
+        if (!b) return;
+        const group = b.closest('[data-group]')?.dataset.group;
+        if (group === 'shape') return set({ shape: b.dataset.v });
+        if (group === 'icon') { set({ icon: b.dataset.v, emoji: '', image: '' }); return sync(); }
+        if (b.dataset.preset) { settings().launcherLook = { ...LOOK_DEFAULT, ...LOOK_PRESETS[b.dataset.preset][1] }; saveSettings(); return sync(); }
+        if (b.dataset.reset) { settings().launcherLook = { ...LOOK_DEFAULT }; saveSettings(); return sync(); }
+        if (b.dataset.img === 'upload') return box.querySelector('input[type="file"]').click();
+        if (b.dataset.img === 'clear') { set({ image: '' }); return sync(); }
+        if (b.dataset.img === 'url') {
+            const url = prompt('ลิงก์รูป (https://… ใช้ PNG พื้นใสหรือ GIF ได้)', /^https?:/.test(look().image) ? look().image : '');
+            if (url == null) return;
+            if (url && !/^https?:\/\//i.test(url.trim())) { toast.warn('ใส่ลิงก์ที่ขึ้นต้นด้วย https://'); return; }
+            set({ image: url.trim(), fit: look().shape === 'sticker' ? 'contain' : look().fit });
+            sync();
+        }
+    });
+    box.querySelector('input[type="file"]').addEventListener('change', async e => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        try {
+            set({ image: await imageToDataUrl(f) });
+            sync();
+        } catch (err) { toast.err(`ใช้รูปนี้ไม่ได้: ${errText(err)}`); }
+    });
+    const onField = e => {
+        const el = e.target.closest('[data-k]');
+        if (!el) return;
+        const k = el.dataset.k;
+        const v = el.type === 'checkbox' ? el.checked : el.type === 'range' ? Number(el.value) : el.value;
+        set({ [k]: v, ...(k === 'emoji' && v ? { image: '' } : {}) });
+    };
+    box.addEventListener('input', onField);
+    box.addEventListener('change', onField);
+    sync();
+}
+
+function shapeSwatch(shape) {
+    const m = MASKS[shape];
+    if (m) return `<span class="cb_shapeswatch" style="${esc(`-webkit-mask:${m.mask} center/100% 100% no-repeat;mask:${m.mask} center/100% 100% no-repeat`)}"></span>`;
+    const radius = { circle: '50%', squircle: '30%', bubble: '50% 50% 50% 14%', pill: '999px' }[shape];
+    if (radius) return `<span class="cb_shapeswatch" style="border-radius:${radius};${shape === 'pill' ? 'width:28px;height:14px' : ''}"></span>`;
+    return '<i class="fa-solid fa-note-sticky"></i>';
 }
 
 function registerCommand() {
