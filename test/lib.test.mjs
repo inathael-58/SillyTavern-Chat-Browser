@@ -36,6 +36,17 @@ Real line.`;
     assert.equal(cleanPreview(msg), 'smiles. Real line.');
 });
 
+test('preset marker lines (§CLK§, [KEY: n] rows) go away', () => {
+    const msg = `§CLK§ ⏳ วันอังคาร · 20 ตุลาคม 2026 · 18:40 · พลบค่ำ · ⏳—
+§STG§ 📍 สถานีตำรวจ ♪ เสียงโทรศัพท์ดังระงม · แอร์เย็นเฉียบ
+§TIER§ [DYNAMISM: 2] [TENSION: 1] [INTIMACY: 1] → LOCKED: [NARRATIVE]
+::HUD:: HP 20
+บานประตูกระจกอัตโนมัติเลื่อนเปิด "มาแล้วเหรอ"`;
+    assert.equal(cleanPreview(msg), 'บานประตูกระจกอัตโนมัติเลื่อนเปิด "มาแล้วเหรอ"');
+    // ordinary lines that merely start with punctuation stay
+    assert.equal(cleanPreview('"Hello," she said.\n*She waves.*\n— Then silence.'), '"Hello," she said. She waves. — Then silence.');
+});
+
 test('keepLines keeps paragraphs', () => {
     assert.equal(cleanPreview('<p>One.</p><p>Two.</p>', { keepLines: true }), 'One.\nTwo.');
 });

@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.0.0'; // keep in sync with manifest.json
+const VERSION = '1.0.1'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -68,6 +68,62 @@ async function st() {
     return stMods;
 }
 
+// ---------------------------------------------------------------- display regex
+//
+// Presets and cards often print status lines (clock, scene, stats) that a regex script turns
+// into a panel or hides when the chat is shown. Previews run the same display scripts first,
+// so whatever the chat never shows as story never shows here either.
+
+let regex = null; // { run, scriptsOf } once SillyTavern's regex engine is loaded
+async function loadRegex() {
+    if (regex) return regex;
+    try {
+        const m = await import('../../regex/engine.js');
+        const base = () => {
+            const list = [];
+            try { list.push(...m.getScriptsByType(m.SCRIPT_TYPES.GLOBAL, { allowedOnly: true })); } catch { /* old ST */ }
+            try { list.push(...m.getScriptsByType(m.SCRIPT_TYPES.PRESET, { allowedOnly: true })); } catch { /* no preset scripts */ }
+            return list;
+        };
+        regex = {
+            run: m.runRegexScript,
+            base,
+            scoped(avatar) {
+                const ext = ctx().extensionSettings || {};
+                if (!ext.character_allowed_regex?.includes?.(avatar)) return [];
+                const sc = charOf(avatar)?.data?.extensions?.regex_scripts;
+                return Array.isArray(sc) ? sc : [];
+            },
+        };
+    } catch (e) {
+        console.warn(LOG, 'regex engine not available', e);
+        regex = { run: null };
+    }
+    return regex;
+}
+
+/** One pass of reading: the scripts that apply to display, computed once per list load. */
+function displayRegexer() {
+    if (!regex?.run) return (text) => text;
+    const ok = s => s && !s.disabled && !s.promptOnly && Array.isArray(s.placement);
+    const base = regex.base().filter(ok);
+    const byAvatar = new Map();
+    return (text, { avatar = null, user = false, name } = {}) => {
+        let scripts = base;
+        if (avatar) {
+            if (!byAvatar.has(avatar)) byAvatar.set(avatar, [...base, ...regex.scoped(avatar).filter(ok)]);
+            scripts = byAvatar.get(avatar);
+        }
+        const place = user ? 1 : 2; // USER_INPUT / AI_OUTPUT
+        let out = String(text ?? '');
+        for (const s of scripts) {
+            if (!s.placement.includes(place)) continue;
+            try { out = regex.run(s, out, { characterOverride: name }); } catch { /* a broken script: skip it */ }
+        }
+        return out;
+    };
+}
+
 // ---------------------------------------------------------------- entities
 
 function charOf(avatar) { return (ctx().characters || []).find(c => c.avatar === avatar); }
@@ -112,7 +168,7 @@ function isGenerating() {
 
 const data = { chats: [], byKey: new Map(), at: 0, loading: null, error: '' };
 
-function normalize(x) {
+function normalize(x, rx = t => t) {
     const c = ctx();
     const file = String(x?.file_name ?? '');
     const chatId = file.replace(/\.jsonl$/i, '');
@@ -130,7 +186,7 @@ function normalize(x) {
     const meta = x.chat_metadata && typeof x.chat_metadata === 'object' ? x.chat_metadata : {};
     const mh = meta.memory_hub;
     const count = Number(x.chat_items) || 0;
-    const raw = String(x.mes ?? '');
+    const raw = rx(String(x.mes ?? ''), { avatar: type === 'character' ? entity : null, name: entityName });
     const preview = count && !/^\[The (chat|message) is empty\]$/.test(raw) ? clip(cleanPreview(raw, { keepLines: true }).replace(/\n{2,}/g, '\n'), 1200) : '';
     const persona = typeof meta.persona === 'string' && meta.persona ? meta.persona : null;
     return {
@@ -187,7 +243,9 @@ async function fetchChats() {
         if (e.status !== 404) throw e;
         raw = await fetchOldWay();
     }
-    return (Array.isArray(raw) ? raw : []).map(normalize).filter(Boolean);
+    await loadRegex();
+    const rx = displayRegexer();
+    return (Array.isArray(raw) ? raw : []).map(x => normalize(x, rx)).filter(Boolean);
 }
 
 function setChats(list) {
@@ -1167,7 +1225,14 @@ async function loadHistory(c) {
     try {
         const arr = await readChat(c);
         const msgs = arr.filter(m => m && 'mes' in m && !m.is_system).slice(-6);
-        ui.history.set(c.key, msgs.map(m => ({ name: m.name ?? '', user: !!m.is_user, text: clip(cleanPreview(m.mes, { keepLines: true }), 700) || '…' })));
+        await loadRegex();
+        const rx = displayRegexer();
+        const avatar = c.type === 'character' ? c.entity : null;
+        ui.history.set(c.key, msgs.map(m => ({
+            name: m.name ?? '',
+            user: !!m.is_user,
+            text: clip(cleanPreview(rx(m.mes, { avatar: m.is_user ? null : avatar, user: !!m.is_user, name: c.entityName }), { keepLines: true }), 700) || '…',
+        })));
     } catch (e) {
         ui.history.set(c.key, `โหลดไม่สำเร็จ: ${errText(e)}`);
     }
