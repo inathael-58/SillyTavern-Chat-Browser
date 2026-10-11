@@ -50,6 +50,9 @@ function isNoiseLine(line) {
     if (/^([-*_=~]\s*){3,}$/.test(t)) return true;                                    // horizontal rule
     if (/^#{1,6}\s/.test(t)) return true;                                             // markdown heading
     if (/^\[[^\]]*\]$/.test(t) || /^【[^】]*】$/.test(t)) return true;                 // [Status: …]
+    // Preset/regex markers that open a status line: §CLK§ …, ::HUD:: …, ¤STAT¤ …
+    if (/^([^\p{L}\p{N}\s*_"'“”‘’()[\]])\1?[\p{L}\d_-]{2,24}\1\1?(?=\s|$)/u.test(t)) return true;
+    if ((t.match(/\[[\p{Lu}\d_ ]{2,}\s*[:：][^\]]*\]/gu) || []).length >= 2) return true; // [DYNAMISM: 2] [TENSION: 1]
     if (/^\(\(.*\)\)$/.test(t) || /^\(?\s*OOC\s*[:：]/i.test(t)) return true;          // ((ooc)) / OOC: …
     if (/^[^\s:：]{1,24}\s*[:：]\s*[\d.,/%+-]+\s*$/.test(t)) return true;              // "HP: 80/100"
     if (/^[\p{Extended_Pictographic}\s|·•:：\d/%.,+-]+$/u.test(t) && /\p{Extended_Pictographic}/u.test(t)) return true; // emoji-only stat rows
