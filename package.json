@@ -1,0 +1,6 @@
+{
+    "name": "sillytavern-chat-browser",
+    "private": true,
+    "type": "module",
+    "scripts": { "test": "node --test test/*.test.mjs" }
+}
