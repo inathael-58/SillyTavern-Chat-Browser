@@ -1160,3 +1160,12 @@
 .cb_root[data-view="compact"] .cb_row:has(.cb_partlist) .cb_side { align-self: start; }
 .cb_preview.cb_nostory { font-style: italic; color: var(--cb-muted); font-size: 0.8em; }
 .cb_root[data-view="detail"] .cb_preview.cb_nostory { border-left-style: dashed; }
+
+/* top bar icon look */
+#cb_topbar .cb_ticon[data-sized="1"] { font-size: var(--cb-tsize) !important; }
+#cb_topbar .cb_ticon_face { display: inline-flex; align-items: center; justify-content: center; width: 1em; height: 1em; line-height: 1; }
+#cb_topbar .cb_ticon_face img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+#cb_topbar .cb_ticon_face span { font-size: 0.85em; line-height: 1; }
+#cb_topbar.cb_nobadge .cb_launch_badge { display: none; }
+.cb_tsize input[type="range"] { flex: 1; min-width: 100px; }
+.cb_tsizeval { min-width: 4.5em; opacity: 0.75; font-size: 0.9em; }
