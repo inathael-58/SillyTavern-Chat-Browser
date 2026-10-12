@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.1.5'; // keep in sync with manifest.json
+const VERSION = '1.2.0'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -27,6 +27,7 @@ const DEFAULTS = Object.freeze({
     launcherPos: Object.freeze({ x: 0, y: 0.72, edge: 'left' }),
     launcherLook: null,  // filled from LOOK_DEFAULT
     topbar: true,        // icon in the top bar
+    topbarLook: null,    // filled from TOP_DEFAULT
 });
 
 const ctx = () => SillyTavern.getContext();
@@ -1704,10 +1705,17 @@ function updateLauncherBadge() {
 
 function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
+/** The part of the page that is actually on screen: it shrinks (and may scroll) when the keyboard opens. */
+function visibleArea() {
+    const vv = window.visualViewport;
+    return vv
+        ? { x: vv.offsetLeft, y: vv.offsetTop, w: vv.width, h: vv.height }
+        : { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+}
+
 function placeLauncher(el = document.getElementById('cb_launcher')) {
     if (!el || el.hidden || el.classList.contains('cb_dragging')) return;
-    const vw = window.visualViewport?.width ?? window.innerWidth;
-    const vh = window.visualViewport?.height ?? window.innerHeight;
+    const { x: ox, y: oy, w: vw, h: vh } = visibleArea();
     const p = settings().launcherPos || DEFAULTS.launcherPos;
     const m = 8, w = el.offsetWidth, h = el.offsetHeight;
     let left = m + clamp(Number(p.x) || 0, 0, 1) * Math.max(0, vw - w - 2 * m);
@@ -1716,9 +1724,17 @@ function placeLauncher(el = document.getElementById('cb_launcher')) {
     if (p.edge === 'right') left = vw - w - m;
     if (p.edge === 'top') top = m;
     if (p.edge === 'bottom') top = vh - h - m;
-    el.style.left = `${Math.round(left)}px`;
-    el.style.top = `${Math.round(top)}px`;
+    el.style.left = `${Math.round(ox + left)}px`;
+    el.style.top = `${Math.round(oy + top)}px`;
     el.dataset.edge = p.edge ?? '';
+}
+
+/** Place again now and once the keyboard has finished sliding (iOS reports the size late). */
+let placeTimer = null;
+function placeLauncherSoon() {
+    requestAnimationFrame(() => placeLauncher());
+    clearTimeout(placeTimer);
+    placeTimer = setTimeout(() => placeLauncher(), 350);
 }
 
 function renderLauncher() {
@@ -1749,17 +1765,18 @@ function renderLauncher() {
         if (!moved && Math.hypot(dx, dy) < 6) return;
         moved = true;
         el.classList.add('cb_dragging');
-        el.style.left = `${clamp(start.left + dx, 0, window.innerWidth - el.offsetWidth)}px`;
-        el.style.top = `${clamp(start.top + dy, 0, window.innerHeight - el.offsetHeight)}px`;
+        const a = visibleArea();
+        el.style.left = `${clamp(start.left + dx, a.x, a.x + a.w - el.offsetWidth)}px`;
+        el.style.top = `${clamp(start.top + dy, a.y, a.y + a.h - el.offsetHeight)}px`;
     });
     const end = e => {
         if (!start || e.pointerId !== start.id) return;
         start = null;
         if (!moved) { if (e.type === 'pointerup') openBrowser(); return; }
         el.classList.remove('cb_dragging');
-        const vw = window.visualViewport?.width ?? window.innerWidth;
-        const vh = window.visualViewport?.height ?? window.innerHeight;
-        const r = el.getBoundingClientRect();
+        const { x: ox, y: oy, w: vw, h: vh } = visibleArea();
+        const b = el.getBoundingClientRect();
+        const r = { left: b.left - ox, top: b.top - oy, right: b.right - ox, bottom: b.bottom - oy, width: b.width, height: b.height };
         const dist = { left: r.left, right: vw - r.right, top: r.top, bottom: vh - r.bottom };
         const edge = Object.keys(dist).reduce((a, b) => (dist[b] < dist[a] ? b : a));
         settings().launcherPos = {
@@ -1772,27 +1789,68 @@ function renderLauncher() {
     };
     el.addEventListener('pointerup', end);
     el.addEventListener('pointercancel', end);
-    window.addEventListener('resize', () => placeLauncher());
-    window.visualViewport?.addEventListener('resize', () => placeLauncher());
+    if (!renderLauncher.wired) {
+        renderLauncher.wired = true;
+        window.addEventListener('resize', placeLauncherSoon);
+        window.visualViewport?.addEventListener('resize', placeLauncherSoon);
+        window.visualViewport?.addEventListener('scroll', () => placeLauncher());
+        document.addEventListener('focusin', placeLauncherSoon);
+        document.addEventListener('focusout', placeLauncherSoon);
+    }
     placeLauncher(el);
+    updateLauncherBadge();
+}
+
+// ---------------------------------------------------------------- top bar icon look
+
+const TOP_DEFAULT = Object.freeze({
+    icon: 'fa-comments',
+    emoji: '',
+    image: '',      // data: URL or link
+    size: 0,        // px; 0 = the theme's own top bar size
+    color: 'theme', // theme | custom
+    colorHex: '#8c8cff',
+    opacity: 100,
+    badge: true,
+});
+
+function topLook() {
+    const s = settings();
+    s.topbarLook = { ...TOP_DEFAULT, ...(s.topbarLook && typeof s.topbarLook === 'object' ? s.topbarLook : {}) };
+    return s.topbarLook;
+}
+
+function applyTopLook(el = document.getElementById('cb_topbar')) {
+    const icon = el?.querySelector('.cb_ticon');
+    if (!icon) return;
+    const T = topLook();
+    const emoji = String(T.emoji ?? '').trim().slice(0, 8);
+    icon.className = `drawer-icon closedIcon interactable cb_ticon ${T.image || emoji ? 'cb_ticon_face' : `fa-solid fa-fw ${/^fa-[\w-]+$/.test(T.icon) ? T.icon : 'fa-comments'}`}`;
+    icon.innerHTML = T.image ? `<img src="${esc(T.image)}" alt="" draggable="false">` : emoji ? `<span>${esc(emoji)}</span>` : '';
+    const size = Number(T.size) || 0;
+    if (size) icon.style.setProperty('--cb-tsize', `${clamp(size, 12, 64)}px`); else icon.style.removeProperty('--cb-tsize');
+    icon.dataset.sized = size ? '1' : '';
+    if (T.color === 'custom') icon.style.color = T.colorHex; else icon.style.removeProperty('color');
+    icon.style.opacity = String(clamp(Number(T.opacity) || 100, 20, 100) / 100);
+    el.classList.toggle('cb_nobadge', !T.badge);
     updateLauncherBadge();
 }
 
 function renderTopbar() {
     let el = document.getElementById('cb_topbar');
     if (!settings().topbar) { el?.remove(); return; }
-    if (el) return;
+    if (el) return applyTopLook(el);
     const holder = document.getElementById('top-settings-holder');
     if (!holder) return;
     el = document.createElement('div');
     el.id = 'cb_topbar';
     el.className = 'drawer';
-    el.innerHTML = '<div class="drawer-toggle-cb"><div class="drawer-icon fa-solid fa-comments fa-fw closedIcon interactable" title="Chat Browser — แชททั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
+    el.innerHTML = '<div class="drawer-toggle-cb"><div class="cb_ticon" title="Chat Browser — แชททั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
     const before = document.getElementById('rightNavHolder');
     if (before?.parentElement === holder) holder.insertBefore(el, before); else holder.append(el);
     el.addEventListener('click', e => { e.stopPropagation(); openBrowser(); });
     el.addEventListener('keydown', e => { if (e.key === 'Enter') openBrowser(); });
-    updateLauncherBadge();
+    applyTopLook(el);
 }
 
 function addWandItem() {
@@ -1826,6 +1884,10 @@ function renderSettingsPanel() {
                     <summary>หน้าตาปุ่มลอย</summary>
                     <div id="cb_look_body"></div>
                 </details>
+                <details class="cb_look">
+                    <summary>หน้าตาไอคอนแถบด้านบน</summary>
+                    <div id="cb_top_body"></div>
+                </details>
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
@@ -1842,6 +1904,7 @@ function renderSettingsPanel() {
     $('cb_set_open').addEventListener('click', () => openBrowser());
     $('cb_set_resetpos').addEventListener('click', () => { s.launcherPos = { ...DEFAULTS.launcherPos }; saveSettings(); if (!s.launcher) { s.launcher = true; $('cb_set_launcher').checked = true; renderLauncher(); } placeLauncher(); });
     renderLookEditor($('cb_look_body'));
+    renderTopEditor($('cb_top_body'));
     $('cb_set_readall').addEventListener('click', async () => {
         if (!data.at) await reload();
         for (const c of data.chats) seen.map[c.key] = c.count;
@@ -1850,6 +1913,97 @@ function renderSettingsPanel() {
         ui.render();
         toast.ok('ทุกแชทอ่านแล้ว');
     });
+}
+
+/** Top bar icon: size, icon / emoji / picture, colour. Changes show on the real icon right away. */
+function renderTopEditor(box) {
+    if (!box) return;
+    const T = topLook();
+    box.innerHTML = `
+        <small class="cb_setnote" style="margin-top:0">ดูผลได้ทันทีที่ไอคอนบนแถบด้านบน · ใช้รูป PNG พื้นใสให้เข้าชุดกับไอคอนของธีมได้</small>
+        <span class="cb_look_label">ไอคอน</span>
+        <div class="cb_look_grid" data-group="ticon">${LOOK_ICONS.map(v => `<button type="button" data-v="${v}"><i class="fa-solid ${v}"></i></button>`).join('')}</div>
+        <div class="cb_look_rows">
+            <span>อีโมจิ</span><input type="text" class="text_pole" data-t="emoji" maxlength="8" placeholder="เช่น 💌 🐱 ✨">
+            <span>รูปภาพ</span>
+            <div class="cb_look_imgbtns">
+                <div class="menu_button" data-timg="upload"><i class="fa-solid fa-image"></i> เลือกรูป</div>
+                <div class="menu_button" data-timg="url"><i class="fa-solid fa-link"></i> ลิงก์รูป</div>
+                <div class="menu_button" data-timg="clear"><i class="fa-solid fa-xmark"></i> เอารูปออก</div>
+                <input type="file" accept="image/*" hidden>
+            </div>
+            <span>ขนาด</span>
+            <div class="cb_look_inline cb_tsize"><input type="range" data-t="size" min="12" max="64" step="1"><span class="cb_tsizeval"></span><div class="menu_button" data-tsize="theme">ตามธีม</div></div>
+            <span>สี</span>
+            <div class="cb_look_inline"><select class="text_pole" data-t="color" style="width:auto"><option value="theme">สีธีม</option><option value="custom">เลือกสี</option></select><input type="color" data-t="colorHex"></div>
+            <span>ความทึบ</span><input type="range" data-t="opacity" min="20" max="100" step="5">
+        </div>
+        <div class="cb_look_checks">
+            <label class="checkbox_label"><input type="checkbox" data-t="badge"> ตัวเลขข้อความใหม่</label>
+        </div>
+        <div class="cb_setbtns"><div class="menu_button" data-treset="1"><i class="fa-solid fa-rotate-left"></i> กลับเป็นแบบเดิม</div></div>`;
+
+    const themeSize = () => {
+        const icon = document.querySelector('#cb_topbar .cb_ticon');
+        return icon ? Math.round(icon.getBoundingClientRect().height) || 0 : 0;
+    };
+    const sync = () => {
+        const cur = topLook();
+        for (const el of box.querySelectorAll('[data-t]')) {
+            const k = el.dataset.t;
+            if (el.type === 'checkbox') el.checked = !!cur[k];
+            else if (k === 'size') el.value = cur.size || themeSize() || 30;
+            else el.value = cur[k] ?? '';
+        }
+        refresh();
+    };
+    // labels and toggles only, so a field being typed in is never rewritten
+    const refresh = () => {
+        const cur = topLook();
+        box.querySelector('.cb_tsizeval').textContent = cur.size ? `${cur.size}px` : 'ตามธีม';
+        box.querySelector('[data-tsize]').hidden = !cur.size;
+        box.querySelector('[data-t="colorHex"]').hidden = cur.color !== 'custom';
+        box.querySelector('[data-timg="clear"]').hidden = !cur.image;
+        box.querySelectorAll('[data-group="ticon"] button').forEach(b => b.classList.toggle('cb_on', !cur.emoji && !cur.image && b.dataset.v === cur.icon));
+    };
+    const set = (patch, all = false) => {
+        Object.assign(topLook(), patch);
+        saveSettings();
+        applyTopLook();
+        if (all) sync(); else refresh();
+    };
+
+    box.addEventListener('click', e => {
+        const b = e.target.closest('button, .menu_button');
+        if (!b) return;
+        if (b.closest('[data-group="ticon"]')) return set({ icon: b.dataset.v, emoji: '', image: '' }, true);
+        if (b.dataset.tsize) return set({ size: 0 }, true);
+        if (b.dataset.treset) { settings().topbarLook = { ...TOP_DEFAULT }; saveSettings(); applyTopLook(); return sync(); }
+        if (b.dataset.timg === 'upload') return box.querySelector('input[type="file"]').click();
+        if (b.dataset.timg === 'clear') return set({ image: '' });
+        if (b.dataset.timg === 'url') {
+            const url = prompt('ลิงก์รูป (https://… ใช้ PNG พื้นใสหรือ GIF ได้)', /^https?:/.test(topLook().image) ? topLook().image : '');
+            if (url == null) return;
+            if (url && !/^https?:\/\//i.test(url.trim())) { toast.warn('ใส่ลิงก์ที่ขึ้นต้นด้วย https://'); return; }
+            set({ image: url.trim() });
+        }
+    });
+    box.querySelector('input[type="file"]').addEventListener('change', async e => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (!f) return;
+        try { set({ image: await imageToDataUrl(f) }); } catch (err) { toast.err(`ใช้รูปนี้ไม่ได้: ${errText(err)}`); }
+    });
+    const onField = e => {
+        const el = e.target.closest('[data-t]');
+        if (!el) return;
+        const k = el.dataset.t;
+        const v = el.type === 'checkbox' ? el.checked : el.type === 'range' ? Number(el.value) : el.value;
+        set({ [k]: v, ...(k === 'emoji' && String(v).trim() ? { image: '' } : {}) });
+    };
+    box.addEventListener('input', onField);
+    box.addEventListener('change', onField);
+    sync();
 }
 
 /** The look editor in the Extensions panel: every change shows on the real button and the preview at once. */
