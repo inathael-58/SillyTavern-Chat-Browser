@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.2.0'; // keep in sync with manifest.json
+const VERSION = '1.2.1'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -857,15 +857,17 @@ const ui = {
         const on = !!a?.dropboxConnected?.();
         const synced = on && a.syncInUse?.();
         const st0 = on ? a.syncState?.() : null;
+        // shown only with Chat Auto Backup installed and connected to Dropbox
         for (const b of r.querySelectorAll('.cb_sync, .cb_clean')) {
-            b.hidden = !a;
-            b.classList.toggle('cb_disabled', !on || (b.classList.contains('cb_clean') && !synced));
+            b.hidden = !on;
+            b.classList.toggle('cb_disabled', b.classList.contains('cb_clean') && !synced);
         }
+        if (!on) return;
         const syncBtn = r.querySelector('.cb_sync');
-        syncBtn.title = !a ? '' : !on ? 'เชื่อมต่อ Dropbox ใน Chat Auto Backup ก่อน' : `ซิงค์กับ Dropbox ตามปกติ${st0?.lastAt ? ` · ล่าสุด ${new Date(st0.lastAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}` : ''}${st0?.decisions ? ` · รอเลือก ${st0.decisions} รายการ` : ''}`;
+        syncBtn.title = `ซิงค์กับ Dropbox ตามปกติ${st0?.lastAt ? ` · ล่าสุด ${new Date(st0.lastAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}` : ''}${st0?.decisions ? ` · รอเลือก ${st0.decisions} รายการ` : ''}`;
         syncBtn.classList.toggle('cb_working', !!st0?.running || this.busy === 'sync');
         syncBtn.querySelector('.cb_dot')?.toggleAttribute('hidden', !st0?.decisions && !st0?.error);
-        r.querySelector('.cb_clean').title = !on ? 'เชื่อมต่อ Dropbox ใน Chat Auto Backup ก่อน' : !synced ? 'ใช้ได้เมื่อเปิดซิงค์แชทระหว่างเครื่องใน Chat Auto Backup แล้ว (กดซิงค์อย่างน้อยหนึ่งครั้ง)' : 'ทำให้ Dropbox และทุกเครื่องมีแชทเหมือนเครื่องนี้เป๊ะ';
+        r.querySelector('.cb_clean').title = !synced ? 'ใช้ได้เมื่อเปิดซิงค์แชทระหว่างเครื่องใน Chat Auto Backup แล้ว (กดซิงค์อย่างน้อยหนึ่งครั้ง)' : 'ทำให้ Dropbox และทุกเครื่องมีแชทเหมือนเครื่องนี้เป๊ะ';
     },
 
     renderSelbar() {
