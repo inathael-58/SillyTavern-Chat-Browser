@@ -23,6 +23,29 @@
     font-family: var(--mainFontFamily, inherit);
 }
 
+/* day / night: a fixed light or dark look, keeping only the theme's accent hue */
+.cb_root[data-scheme="light"] {
+    --cb-fg: #2a2833;
+    --cb-tint: rgba(250, 248, 245, 0.96);
+    --cb-panel: rgba(250, 248, 245, 0.97);
+    --cb-solid: #fbfaf7;
+    --cb-accent: color-mix(in oklab, var(--SmartThemeQuoteColor, #c2690a) 70%, #000);
+    --cb-on-accent: #ffffff;
+    --cb-shadow: rgba(40, 32, 56, 0.22);
+    --cb-ok: #2f8a3e;
+    color-scheme: light;
+}
+.cb_root[data-scheme="dark"] {
+    --cb-fg: #e7e4ee;
+    --cb-tint: rgba(22, 21, 28, 0.95);
+    --cb-panel: rgba(24, 23, 30, 0.97);
+    --cb-solid: #1b1a21;
+    --cb-accent: color-mix(in oklab, var(--SmartThemeQuoteColor, #e18a24) 72%, #fff);
+    --cb-on-accent: #17161c;
+    --cb-shadow: rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+}
+
 /* ---------------------------------------------------------------- overlay & panel */
 
 .cb_root {

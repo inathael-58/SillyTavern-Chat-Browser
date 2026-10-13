@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.2.1'; // keep in sync with manifest.json
+const VERSION = '1.3.0'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -28,6 +28,7 @@ const DEFAULTS = Object.freeze({
     launcherLook: null,  // filled from LOOK_DEFAULT
     topbar: true,        // icon in the top bar
     topbarLook: null,    // filled from TOP_DEFAULT
+    scheme: 'theme',     // theme | light | dark — colours of the browser window
 });
 
 const ctx = () => SillyTavern.getContext();
@@ -892,6 +893,27 @@ function chatFromRow(row) {
     return row ? data.byKey.get(row.dataset.key) : null;
 }
 
+// theme colours, or a light / dark look that ignores the theme
+const SCHEMES = [
+    ['theme', 'fa-solid fa-palette', 'สีตามธีม'],
+    ['light', 'fa-solid fa-sun', 'กลางวัน'],
+    ['dark', 'fa-solid fa-moon', 'กลางคืน'],
+];
+
+function applyScheme(root = ui.root) {
+    if (!root) return;
+    const s = settings();
+    const i = Math.max(0, SCHEMES.findIndex(x => x[0] === s.scheme));
+    const [id, icon, label] = SCHEMES[i];
+    const next = SCHEMES[(i + 1) % SCHEMES.length][2];
+    if (id === 'theme') delete root.dataset.scheme; else root.dataset.scheme = id;
+    const b = root.querySelector('.cb_scheme');
+    if (!b) return;
+    b.innerHTML = `<i class="${icon}"></i>`;
+    b.title = `สี: ${label} — แตะเพื่อเปลี่ยนเป็น${next}`;
+    b.setAttribute('aria-label', b.title);
+}
+
 function openBrowser() {
     if (ui.root) { ui.root.querySelector('.cb_search')?.focus(); return; }
     ui.query = '';
@@ -910,6 +932,7 @@ function openBrowser() {
                     <div class="cb_tools">
                         <button class="cb_tool cb_sync" hidden><i class="fa-solid fa-rotate"></i><span>Sync</span><i class="cb_dot" hidden></i></button>
                         <button class="cb_tool cb_clean" hidden><i class="fa-solid fa-broom"></i><span>Clean Sync</span></button>
+                        <button class="cb_tool cb_scheme"></button>
                         <button class="cb_tool cb_selectbtn" title="เลือกหลายแชท"><i class="fa-regular fa-square-check"></i></button>
                         <button class="cb_tool cb_closebtn" title="ปิด (Esc)" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>
                     </div>
@@ -940,6 +963,7 @@ function openBrowser() {
     ui.root = root;
     fitViewport();
     root.dataset.view = s.view;
+    applyScheme(root);
     wireBrowser(root);
     ui.render();
     requestAnimationFrame(() => root.classList.add('cb_in'));
@@ -1030,6 +1054,12 @@ function wireBrowser(root) {
     root.querySelector('.cb_sync').addEventListener('click', () => runSync());
     root.querySelector('.cb_clean').addEventListener('click', () => openCleanSync());
     root.querySelector('.cb_selectbtn').addEventListener('click', () => setSelecting(!ui.selecting));
+    root.querySelector('.cb_scheme').addEventListener('click', () => {
+        const order = SCHEMES.map(x => x[0]);
+        s.scheme = order[(order.indexOf(s.scheme) + 1) % order.length];
+        saveSettings();
+        applyScheme(root);
+    });
     root.querySelector('.cb_selbar').addEventListener('click', e => {
         const b = e.target.closest('[data-bulk]');
         if (b && !b.classList.contains('cb_disabled')) bulk(b.dataset.bulk);
