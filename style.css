@@ -825,6 +825,7 @@
     transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .cb_sheet.cb_wide { width: min(640px, 100%); }
+.cb_sheetwrap.cb_typing { align-items: flex-start; padding-top: 12px; }
 .cb_sheetwrap.cb_in .cb_sheet { transform: none; }
 .cb_sheethead { display: flex; align-items: center; gap: 8px; padding: 14px 12px 6px 18px; }
 .cb_sheethead b { flex: 1; font-size: 1.04em; }
@@ -979,6 +980,8 @@
     .cb_sheet,
     .cb_sheet.cb_wide { width: 100%; max-height: 92%; border-radius: 22px 22px 0 0; transform: translateY(40px); padding-bottom: env(safe-area-inset-bottom, 0px); }
     .cb_sheetfoot .cb_btn { flex: 1 1 auto; }
+    .cb_sheetwrap.cb_typing { align-items: flex-start; padding: 8px; }
+    .cb_sheetwrap.cb_typing .cb_sheet { max-height: 100%; border-radius: 18px; transform: translateY(-16px); padding-bottom: 0; }
     .cb_cstat { padding: 10px; }
     .cb_cstat b { font-size: 1.35em; }
 }
