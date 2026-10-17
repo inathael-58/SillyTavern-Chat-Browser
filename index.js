@@ -10,7 +10,7 @@
 import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.3.0'; // keep in sync with manifest.json
+const VERSION = '1.3.1'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -981,18 +981,45 @@ function closeBrowser() {
     ui.selecting = false;
     ui.selected.clear();
     ui.history.clear();
-    window.visualViewport?.removeEventListener('resize', fitViewport);
+    window.visualViewport?.removeEventListener('resize', fitViewportSoon);
     window.visualViewport?.removeEventListener('scroll', fitViewport);
-    window.removeEventListener('resize', fitViewport);
+    window.removeEventListener('resize', fitViewportSoon);
+    window.removeEventListener('scroll', fitViewport);
+    document.removeEventListener('focusin', fitViewportSoon);
+    document.removeEventListener('focusout', fitViewportSoon);
+    fitTimers.forEach(clearTimeout);
     root.classList.remove('cb_in');
     root.classList.add('cb_out');
     setTimeout(() => root.remove(), 180);
+}
+
+/**
+ * The page under the browser never scrolls in SillyTavern, but iOS scrolls it to bring a focused
+ * field above the keyboard, which drags the whole browser up and off the screen. Undo that.
+ */
+function keepPageStill() {
+    const se = document.scrollingElement || document.documentElement;
+    if (window.scrollX || window.scrollY || se.scrollTop || se.scrollLeft || document.body.scrollTop) {
+        window.scrollTo(0, 0);
+        se.scrollTop = 0;
+        se.scrollLeft = 0;
+        document.body.scrollTop = 0;
+    }
+}
+
+/** Fit again now and as the keyboard finishes sliding in or out (iOS reports it in steps). */
+let fitTimers = [];
+function fitViewportSoon() {
+    fitViewport();
+    fitTimers.forEach(clearTimeout);
+    fitTimers = [80, 250, 500].map(ms => setTimeout(fitViewport, ms));
 }
 
 /** Size the overlay to the visible viewport, so the on-screen keyboard never hides the list. */
 function fitViewport() {
     const r = ui.root;
     if (!r) return;
+    keepPageStill();
     const vv = window.visualViewport;
     r.style.top = `${vv ? vv.offsetTop : 0}px`;
     r.style.left = `${vv ? vv.offsetLeft : 0}px`;
@@ -1000,9 +1027,12 @@ function fitViewport() {
     r.style.height = `${vv ? vv.height : window.innerHeight}px`;
     if (!r.dataset.fitWired) {
         r.dataset.fitWired = '1';
-        vv?.addEventListener('resize', fitViewport);
+        vv?.addEventListener('resize', fitViewportSoon);
         vv?.addEventListener('scroll', fitViewport);
-        window.addEventListener('resize', fitViewport);
+        window.addEventListener('resize', fitViewportSoon);
+        window.addEventListener('scroll', fitViewport, { passive: true });
+        document.addEventListener('focusin', fitViewportSoon);
+        document.addEventListener('focusout', fitViewportSoon);
     }
 }
 
@@ -1335,11 +1365,12 @@ async function loadHistory(c) {
 
 // ---------------------------------------------------------------- sheets (small dialogs inside the panel)
 
-function sheet({ title, body, buttons, wide = false, onMount }) {
+function sheet({ title, body, buttons, wide = false, typing = false, onMount }) {
     return new Promise(resolve => {
         const layer = ui.root.querySelector('.cb_layer');
         const el = document.createElement('div');
-        el.className = 'cb_sheetwrap';
+        // a sheet you type into sits at the top, where the on-screen keyboard never covers it
+        el.className = `cb_sheetwrap${typing ? ' cb_typing' : ''}`;
         el.innerHTML = `<div class="cb_sheet${wide ? ' cb_wide' : ''}" role="dialog" aria-modal="true">
             <div class="cb_sheethead"><b>${esc(title)}</b><button class="cb_iconbtn" data-x aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button></div>
             <div class="cb_sheetbody">${body}</div>
@@ -1384,6 +1415,7 @@ function sheetConfirm({ title, body, ok = 'ตกลง', danger = false }) {
 function sheetPrompt({ title, value = '', ok = 'ตกลง', hint = '' }) {
     return sheet({
         title,
+        typing: true,
         body: `<input class="cb_input" type="text" value="${esc(value)}" spellcheck="false" autocomplete="off">${hint ? `<p class="cb_note">${hint}</p>` : ''}`,
         buttons: [
             { label: 'ยกเลิก', run: a => a.close(null) },
@@ -1391,7 +1423,7 @@ function sheetPrompt({ title, value = '', ok = 'ตกลง', hint = '' }) {
         ],
         onMount: a => {
             const input = a.body.querySelector('input');
-            setTimeout(() => { input.focus(); input.select(); }, 50);
+            setTimeout(() => { input.focus({ preventScroll: true }); input.select(); }, 50);
             input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); a.close(input.value); } });
         },
     });
