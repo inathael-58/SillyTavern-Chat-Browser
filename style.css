@@ -91,8 +91,10 @@
     overflow: hidden;
     opacity: 0;
     transform: translateY(14px) scale(0.985);
-    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* the gallery takes more of a big screen: more and bigger covers */
+.cb_root[data-view="gallery"] .cb_panel { width: min(1320px, 100%); height: min(1040px, 100%); }
 .cb_root.cb_in .cb_backdrop { opacity: 1; }
 .cb_root.cb_in .cb_panel { opacity: 1; transform: none; }
 .cb_root.cb_out .cb_backdrop { opacity: 0; }
@@ -1654,6 +1656,20 @@
     .cb_tags,
     .cb_members { justify-content: flex-start; }
     .cb_heroinfo h3 { font-size: 1.7em; }
+}
+
+/* big screens: larger covers in the large size; the card page keeps its text to a readable width */
+@media (min-width: 1000px) {
+    .cb_grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; padding: 12px 8px 8px; }
+    .cb_grid.cb_g_compact { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 10px; }
+    /* the cover's glow spans the window; its content and the chats stay in a 980px column */
+    .cb_oncard .cb_cardnav { padding-left: max(10px, calc((100% - 980px) / 2)); padding-right: max(10px, calc((100% - 980px) / 2)); }
+    .cb_hero { padding-left: max(26px, calc((100% - 980px) / 2 + 18px)); padding-right: max(26px, calc((100% - 980px) / 2 + 18px)); }
+    .cb_heroimg { width: 240px; }
+    .cb_oncard .cb_cnote { max-width: 964px; margin-left: auto; margin-right: auto; }
+    .cb_oncard .cb_cardchats,
+    .cb_oncard .cb_list > .cb_row { max-width: 980px; margin-left: auto; margin-right: auto; }
+    .cb_oncard .cb_list > .cb_section { max-width: 996px; margin-left: auto; margin-right: auto; }
 }
 
 @media (max-width: 600px) {
