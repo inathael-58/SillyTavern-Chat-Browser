@@ -91,8 +91,10 @@
     overflow: hidden;
     opacity: 0;
     transform: translateY(14px) scale(0.985);
-    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* the gallery takes more of a big screen: more and bigger covers */
+.cb_root[data-view="gallery"] .cb_panel { width: min(1320px, 100%); height: min(1040px, 100%); }
 .cb_root.cb_in .cb_backdrop { opacity: 1; }
 .cb_root.cb_in .cb_panel { opacity: 1; transform: none; }
 .cb_root.cb_out .cb_backdrop { opacity: 0; }
@@ -121,8 +123,24 @@
     border-bottom: 1px solid var(--cb-line);
     display: flex;
     flex-direction: column;
-    gap: 10px;
 }
+/* search, sort and filters: one block that folds away while scrolling down (phones) */
+.cb_headmore {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.18s;
+}
+.cb_headin {
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0 -16px -3px;
+    padding: 10px 16px 3px; /* room for the search box's focus ring */
+}
+.cb_headfold .cb_headmore { grid-template-rows: 0fr; opacity: 0; pointer-events: none; }
+.cb_oncard .cb_headmore { display: none; }
 
 .cb_titlebar { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .cb_title { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; font-size: 1.12em; }
@@ -1002,11 +1020,20 @@
         transform: translateY(24px);
         padding-top: env(safe-area-inset-top, 0px);
     }
-    .cb_head { padding: 12px 12px 8px; gap: 9px; }
-    .cb_chips { margin: 0 -12px; padding: 0 12px 2px; }
+    /* a smaller header, so the list gets the screen */
+    .cb_head { padding: 8px 10px 6px; }
+    .cb_headin { gap: 7px; margin: 0 -10px -3px; padding: 7px 10px 3px; }
+    .cb_chips { margin: 0 -10px; padding: 0 10px 2px; }
+    .cb_titlebar { min-height: 34px; gap: 8px; }
+    .cb_title { font-size: 1.02em; gap: 7px; }
+    .cb_tools { gap: 5px; }
     .cb_tool > span { display: none; }
-    .cb_tool { padding: 0 !important; width: 38px; height: 38px; }
+    .cb_tool { padding: 0 !important; width: 34px; height: 34px; min-width: 34px; border-radius: 10px; }
+    .cb_searchrow { height: 38px; border-radius: 12px; padding: 0 6px 0 12px; gap: 8px; }
     .cb_controls { gap: 6px; }
+    .cb_seg { padding: 2px; border-radius: 10px; }
+    .cb_seg button { height: 28px; border-radius: 8px; }
+    .cb_chip { height: 28px; padding: 0 10px !important; }
     .cb_sort { flex: 1; }
     .cb_sort button { flex: 1; padding: 0 6px !important; }
     .cb_list { padding: 2px 4px calc(16px + env(safe-area-inset-bottom, 0px)); }
@@ -1384,21 +1411,15 @@
 @keyframes cb_fromr { from { opacity: 0; transform: translateX(28px); } }
 @keyframes cb_froml { from { opacity: 0; transform: translateX(-28px); } }
 
-.cb_cardbar {
-    position: sticky;
-    top: 0;
-    z-index: 4;
+.cb_cardnav {
+    flex: none;
     display: flex;
     align-items: center;
     gap: 2px;
-    margin: -4px -8px 0;
-    padding: 8px 10px;
-    background: color-mix(in srgb, var(--cb-panel) 78%, transparent);
-    backdrop-filter: blur(14px) saturate(1.2);
-    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    padding: 6px 10px;
     border-bottom: 1px solid var(--cb-line);
+    background: color-mix(in srgb, var(--cb-fg) 3%, transparent);
 }
-.cb_oncard .cb_section { top: 51px; }
 .cb_back {
     display: inline-flex !important;
     align-items: center;
@@ -1472,7 +1493,21 @@
 }
 .cb_favstar { color: #f2b632; font-size: 0.7em; margin-right: 8px; vertical-align: 0.15em; }
 .cb_herosub { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px 14px; font-size: 0.82em; color: var(--cb-muted); }
-.cb_herosub span { display: inline-flex; align-items: center; gap: 6px; }
+.cb_herosub span,
+.cb_herosub .cb_link { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; white-space: nowrap; }
+.cb_herosub .cb_link {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    color: var(--cb-fg);
+    text-decoration: none;
+    background: color-mix(in srgb, var(--cb-fg) 8%, transparent);
+    border: 1px solid var(--cb-line);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cb_herosub .cb_link:hover { border-color: var(--cb-accent-line); color: var(--cb-accent); }
+.cb_herosub .cb_link > i { font-size: 0.85em; color: var(--cb-muted); }
 .cb_tags,
 .cb_members { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .cb_tag {
@@ -1623,13 +1658,26 @@
     .cb_heroinfo h3 { font-size: 1.7em; }
 }
 
+/* big screens: larger covers in the large size; the card page keeps its text to a readable width */
+@media (min-width: 1000px) {
+    .cb_grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; padding: 12px 8px 8px; }
+    .cb_grid.cb_g_compact { grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 10px; }
+    /* the cover's glow spans the window; its content and the chats stay in a 980px column */
+    .cb_oncard .cb_cardnav { padding-left: max(10px, calc((100% - 980px) / 2)); padding-right: max(10px, calc((100% - 980px) / 2)); }
+    .cb_hero { padding-left: max(26px, calc((100% - 980px) / 2 + 18px)); padding-right: max(26px, calc((100% - 980px) / 2 + 18px)); }
+    .cb_heroimg { width: 240px; }
+    .cb_oncard .cb_cnote { max-width: 964px; margin-left: auto; margin-right: auto; }
+    .cb_oncard .cb_cardchats,
+    .cb_oncard .cb_list > .cb_row { max-width: 980px; margin-left: auto; margin-right: auto; }
+    .cb_oncard .cb_list > .cb_section { max-width: 996px; margin-left: auto; margin-right: auto; }
+}
+
 @media (max-width: 600px) {
     .cb_grid { gap: 10px; padding: 8px 4px 4px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
     .cb_grid.cb_g_compact { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
     .cb_gridbar { padding: 6px 6px 0; }
     .cb_tile { border-radius: 16px; }
-    .cb_cardbar { margin: -2px -4px 0; padding: 6px 8px; }
-    .cb_oncard .cb_section { top: 47px; }
+    .cb_cardnav { padding: 4px 6px; }
     .cb_hero { margin: 0 -4px; }
     .cb_cnote { margin: 4px 4px 12px; }
     .cb_view button { padding: 0 8px !important; }

@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.0'; // keep in sync with manifest.json
+const VERSION = '1.4.1'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -672,6 +672,7 @@ const ui = {
             this.shownN = this.entries.filter(e => e.kind === 'chat').length;
         }
         this.root.classList.toggle('cb_oncard', !!card);
+        this.root.querySelector('.cb_cardnav').hidden = !card;
         this.renderControls();
         const list = this.root.querySelector('.cb_list');
         const top = list.scrollTop;
@@ -902,21 +903,20 @@ const ui = {
         const isOpen = card.chats.some(c => c.key === cur);
         const step = (d, x) => `<button class="cb_iconbtn cb_step" data-step="${d}"${x ? ` title="${esc(x.name)}"` : ' disabled'} aria-label="${d < 0 ? 'การ์ดก่อนหน้า' : 'การ์ดถัดไป'}"><i class="fa-solid fa-chevron-${d < 0 ? 'left' : 'right'}"></i></button>`;
         const tagStyle = t => (t.color ? ` style="--tag-bg:${esc(t.color)};${t.color2 ? `--tag-fg:${esc(t.color2)};` : ''}"` : '');
-        // the bar is its own row of the list, so it stays on top while the chats scroll by
-        return `<div class="cb_cardbar" data-cardpage="${esc(card.id)}">
+        // back / position / prev-next sit under the header, outside the scrolling list
+        this.root.querySelector('.cb_cardnav').innerHTML = `
                 <button class="cb_back" data-back="1"><i class="fa-solid fa-chevron-left"></i><span>การ์ดทั้งหมด</span></button>
                 <span class="cb_cardpos">${i >= 0 ? `${i + 1} / ${this.cards.length}` : ''}</span>
-                ${step(-1, prev)}${step(1, next)}
-            </div>
-            <div class="cb_card" data-cardpage="${esc(card.id)}">
+                ${step(-1, prev)}${step(1, next)}`;
+        return `<div class="cb_card" data-cardpage="${esc(card.id)}">
             <div class="cb_hero">
                 <img class="cb_herobg" src="${esc(m.thumb || m.collage?.[0]?.thumb || '')}" alt="" aria-hidden="true">
                 <button class="cb_heroimg" data-zoom="1" title="ดูรูปเต็ม" aria-label="ดูรูปเต็ม">${this.coverHtml(m, false)}</button>
                 <div class="cb_heroinfo">
                     <h3>${m.fav ? '<i class="fa-solid fa-star cb_favstar" title="ตัวละครโปรด"></i>' : ''}${esc(card.name)}</h3>
                     <div class="cb_herosub">
-                        ${m.creator ? `<span title="ผู้สร้างการ์ด"><i class="fa-solid fa-feather-pointed"></i>${esc(m.creator)}</span>` : ''}
-                        ${m.version ? `<span title="เวอร์ชันการ์ด">v${esc(m.version)}</span>` : ''}
+                        ${creditHtml(m.creator, { icon: 'fa-solid fa-feather-pointed', title: 'ผู้สร้างการ์ด' })}
+                        ${creditHtml(m.version, { prefix: 'v', title: 'เวอร์ชันการ์ด', maxText: 16 })}
                         <span><i class="fa-regular fa-comments"></i>${card.count} แชท</span>
                         <span><i class="fa-regular fa-message"></i>${card.total.toLocaleString('th-TH')} ข้อความ</span>
                         ${card.last ? `<span title="${esc(fullTime(card.last))}"><i class="fa-regular fa-clock"></i>${esc(relTime(card.last))}</span>` : ''}
@@ -1077,6 +1077,36 @@ function cardMeta(id) {
     };
 }
 
+/**
+ * Creator / version as cards write them: a name, or links to where the card came from.
+ * Links become short chips (site and first folder); long plain text is cut.
+ */
+function creditHtml(value, { icon = '', prefix = '', title = '', maxText = 40 } = {}) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    const links = [];
+    const text = raw
+        .replace(/https?:\/\/[^\s<>"']+/gi, url => {
+            const tail = url.match(/[).,;:!?\]]+$/)?.[0] ?? '';
+            links.push(url.slice(0, url.length - tail.length));
+            return ' ';
+        })
+        .replace(/[([]\s*[)\]]|[([]\s*$/g, ' ')   // brackets left empty by the links
+        .replace(/\s+/g, ' ').trim();
+    const out = [];
+    if (text && text.length <= maxText) out.push(`<span title="${esc(title)}">${icon ? `<i class="${icon}"></i>` : ''}${esc(prefix)}${esc(text)}</span>`);
+    for (const url of links.slice(0, 3)) {
+        let label = url;
+        try {
+            const u = new URL(url);
+            const dir = u.pathname.split('/').filter(Boolean)[0];
+            label = `${u.hostname.replace(/^www\./, '')}${dir ? `/${dir}` : ''}`;
+        } catch { continue; }
+        out.push(`<a class="cb_link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}: ${esc(url)}">${icon && !out.length ? `<i class="${icon}"></i>` : '<i class="fa-solid fa-link"></i>'}${esc(label)}</a>`);
+    }
+    return out.join('');
+}
+
 /** Tags and creator, so the gallery search finds cards by them too. */
 function cardSearchText(id) {
     const m = cardMeta(id);
@@ -1198,6 +1228,7 @@ function openBrowser() {
                         <button class="cb_tool cb_closebtn" title="ปิด (Esc)" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>
                     </div>
                 </div>
+                <div class="cb_headmore"><div class="cb_headin">
                 <label class="cb_searchrow">
                     <i class="fa-solid fa-magnifying-glass"></i>
                     <input type="search" class="cb_search" placeholder="ค้นหาชื่อแชท ตัวละคร persona หรือเนื้อหา" autocomplete="off" spellcheck="false">
@@ -1208,7 +1239,9 @@ function openBrowser() {
                     <div class="cb_seg cb_view">${VIEWS.map(([id, icon, tip]) => `<button data-view="${id}" title="${tip}" aria-label="${tip}"><i class="${icon}"></i></button>`).join('')}</div>
                 </div>
                 <div class="cb_chips"></div>
+                </div></div>
             </header>
+            <nav class="cb_cardnav" hidden></nav>
             <div class="cb_list" role="list"></div>
             <footer class="cb_selbar" hidden>
                 <span class="cb_selcount"></span>
@@ -1359,6 +1392,10 @@ function wireBrowser(root) {
         ui.render();
     });
 
+    root.querySelector('.cb_cardnav').addEventListener('click', e => {
+        if (e.target.closest('[data-back]')) closeCard();
+        else if (e.target.closest('[data-step]:not(:disabled)')) stepCard(Number(e.target.closest('[data-step]').dataset.step));
+    });
     root.querySelector('.cb_sync').addEventListener('click', () => runSync());
     root.querySelector('.cb_clean').addEventListener('click', () => openCleanSync());
     root.querySelector('.cb_selectbtn').addEventListener('click', () => setSelecting(!ui.selecting));
@@ -1382,9 +1419,7 @@ function wireBrowser(root) {
         const card = t.closest('[data-cardpage]');
         if (card) {
             const id = card.dataset.cardpage;
-            if (t.closest('[data-back]')) closeCard();
-            else if (t.closest('[data-step]')) stepCard(Number(t.closest('[data-step]').dataset.step));
-            else if (t.closest('[data-zoom]')) zoomCover(id);
+            if (t.closest('[data-zoom]')) zoomCover(id);
             else if (t.closest('[data-tag]')) searchFor(t.closest('[data-tag]').dataset.tag);
             else if (t.closest('[data-continue]')) doOpen(data.byKey.get(t.closest('[data-continue]').dataset.continue));
             else if (t.closest('[data-note]')) {
@@ -1430,6 +1465,24 @@ function wireBrowser(root) {
         pressTimer = setTimeout(() => { pressTimer = null; setSelecting(true); toggleSelect(pressKey); navigator.vibrate?.(15); }, 550);
     });
     const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
+
+    // Phones: the search, sort and filter rows fold away while scrolling down and come back on the way up.
+    const small = matchMedia('(max-width: 600px)');
+    let lastY = 0, foldLock = 0;
+    list.addEventListener('scroll', () => {
+        const y = list.scrollTop;
+        if (performance.now() < foldLock) { lastY = y; return; }  // the list just changed height: not the user
+        const d = y - lastY;
+        if (y > 8 && Math.abs(d) < 12) return;   // small moves add up until they count
+        lastY = y;
+        const fold = small.matches && y > 8 && d > 0 && document.activeElement !== search
+            && list.scrollHeight - list.clientHeight > 240; // not worth it for a short list
+        if (fold === root.classList.contains('cb_headfold')) return;
+        root.classList.toggle('cb_headfold', fold);
+        foldLock = performance.now() + 320;
+    }, { passive: true });
+    search.addEventListener('focus', () => root.classList.remove('cb_headfold'));
+    small.addEventListener?.('change', () => { if (!small.matches) root.classList.remove('cb_headfold'); });
 
     // Full covers fade in over their thumbnail once loaded.
     list.addEventListener('load', e => { if (e.target.matches?.('img.cb_full')) e.target.classList.add('cb_loaded'); }, true);
