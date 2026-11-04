@@ -29,6 +29,7 @@ const DEFAULTS = Object.freeze({
     topbar: true,        // icon in the top bar
     topbarLook: null,    // filled from TOP_DEFAULT
     scheme: 'theme',     // theme | light | dark — colours of the browser window
+    gallerySize: 'large', // large | compact — cover size in the gallery
 });
 
 const ctx = () => SillyTavern.getContext();
@@ -685,7 +686,12 @@ const ui = {
         } else if (gallery) {
             const anim = this.animate && this.cards.length ? ' cb_anim' : '';
             if (anim) this.animate = false;
-            list.innerHTML = this.cards.length ? `<div class="cb_grid${anim}">${this.cards.map((x, i) => this.tileHtml(x, i)).join('')}</div>` : this.emptyHtml();
+            const size = s.gallerySize === 'compact' ? 'compact' : 'large';
+            const sizeBtn = (id, icon, tip) => `<button data-gsize="${id}" class="${size === id ? 'cb_on' : ''}" title="${tip}" aria-label="${tip}"><i class="${icon}"></i></button>`;
+            list.innerHTML = this.cards.length
+                ? `<div class="cb_gridbar"><span>${this.cards.length} การ์ด</span><div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div>
+                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.map((x, i) => this.tileHtml(x, i)).join('')}</div>`
+                : this.emptyHtml();
             this.watchCovers();
         } else if (!this.entries.length) {
             list.innerHTML = this.emptyHtml();
@@ -871,7 +877,7 @@ const ui = {
         const m = cardMeta(card.id);
         const cur = currentKey();
         const isOpen = card.chats.some(c => c.key === cur);
-        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0" style="--d:${Math.min(i, 18) * 28}ms" aria-label="${esc(card.name)} · ${card.count} แชท">
+        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0" style="--i:${Math.min(i, 40)}" aria-label="${esc(card.name)} · ${card.count} แชท">
             <div class="cb_cover">${this.coverHtml(m)}</div>
             <div class="cb_tiletop">
                 ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
@@ -1097,6 +1103,23 @@ function closeCard() {
     list.scrollTop = ui.gridTop;
     const tile = list.querySelector(`.cb_tile[data-card="${CSS.escape(from)}"]`);
     if (tile) { tile.classList.add('cb_back_here'); tile.focus({ preventScroll: true }); }
+}
+
+/** Big covers or small ones; the card at the top of the screen stays at the top. */
+function setGallerySize(size) {
+    const s = settings();
+    if (s.gallerySize === size) return;
+    const list = ui.root.querySelector('.cb_list');
+    const top = list.getBoundingClientRect().top;
+    const first = [...list.querySelectorAll('.cb_tile')].find(t => t.getBoundingClientRect().bottom > top + 8);
+    const atTop = list.scrollTop < 40;
+    s.gallerySize = size;
+    saveSettings();
+    ui.animate = atTop;
+    ui.render();
+    const again = first && list.querySelector(`.cb_tile[data-card="${CSS.escape(first.dataset.card)}"]`);
+    if (atTop || !again) list.scrollTop = 0;
+    else list.scrollTop += again.getBoundingClientRect().top - list.getBoundingClientRect().top - 8;
 }
 
 /** Next or previous card on the grid's order (buttons, arrow keys, swiping sideways). */
@@ -1354,6 +1377,8 @@ function wireBrowser(root) {
         const t = e.target;
         const tile = t.closest('.cb_tile');
         if (tile) { openCard(tile.dataset.card); return; }
+        const gsize = t.closest('[data-gsize]');
+        if (gsize) { setGallerySize(gsize.dataset.gsize); return; }
         const card = t.closest('[data-cardpage]');
         if (card) {
             const id = card.dataset.cardpage;
