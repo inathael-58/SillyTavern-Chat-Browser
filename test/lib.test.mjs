@@ -154,3 +154,36 @@ test('renameInMeta updates every link', () => {
     assert.equal(meta.main_chat, 'c');
     assert.ok(!renameInMeta(meta, 'zzz', 'y'));
 });
+
+test('buildCards groups chats per character, filters and searches tags', async () => {
+    const { buildCards } = await import('../lib.js');
+    const chats = [
+        { key: 'c:a.png:1', type: 'character', entity: 'a.png', entityName: 'Alice', chatId: '1', count: 10, last: 100 },
+        { key: 'c:a.png:2', type: 'character', entity: 'a.png', entityName: 'Alice', chatId: '2', count: 5, last: 300 },
+        { key: 'c:b.png:3', type: 'character', entity: 'b.png', entityName: 'Bob', chatId: '3', count: 50, last: 200, persona: 'p.png' },
+        { key: 'g:7:4', type: 'group', entity: '7', entityName: 'Party', chatId: '4', count: 1, last: 50 },
+    ];
+    const recent = buildCards(chats);
+    assert.deepEqual(recent.map(x => x.name), ['Alice', 'Bob', 'Party']);
+    assert.equal(recent[0].count, 2);
+    assert.equal(recent[0].total, 15);
+    assert.equal(recent[0].head.chatId, '2');
+    assert.deepEqual(buildCards(chats, { sort: 'size' }).map(x => x.name), ['Bob', 'Alice', 'Party']);
+    assert.deepEqual(buildCards(chats, { filter: 'group' }).map(x => x.name), ['Party']);
+    assert.deepEqual(buildCards(chats, { persona: 'p.png' }).map(x => x.name), ['Bob']);
+    assert.deepEqual(buildCards(chats, { pins: { 'c:a.png:1': 1 }, filter: 'pinned' }).map(x => x.name), ['Alice']);
+    assert.deepEqual(buildCards(chats, { unreadOf: c => (c.chatId === '3' ? 2 : 0), filter: 'unread' }).map(x => x.name), ['Bob']);
+    assert.deepEqual(buildCards(chats, { query: 'fantasy', extraText: id => (id === 'b.png' || id === 'character|b.png' ? 'Fantasy Knight' : '') }).map(x => x.name), ['Bob']);
+});
+
+test('noteText turns creator notes into plain paragraphs', async () => {
+    const { noteText } = await import('../lib.js');
+    const note = '<style>.x{color:red}</style><div><b>Hello</b> {{user}}!</div><p>I am {{char}} &amp; friends.</p>![pic](https://x/y.png)<ul><li>one</li><li>two</li></ul>';
+    assert.equal(noteText(note, { char: 'Mia', user: 'Kit' }), 'Hello Kit!\nI am Mia & friends.\n• one\n• two');
+});
+
+test('fileName strips characters no file system allows', async () => {
+    const { fileName } = await import('../lib.js');
+    assert.equal(fileName('A: b/c?', 'txt'), 'A_ b_c_.txt');
+    assert.equal(fileName('', 'jsonl'), 'chat.jsonl');
+});
