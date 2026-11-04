@@ -7,10 +7,10 @@
  * story, and run Sync / Clean Sync through Chat Auto Backup.
  */
 
-import { buildEntries, cleanPreview, clip, compareText, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
+import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.3.1'; // keep in sync with manifest.json
+const VERSION = '1.4.0'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -18,7 +18,7 @@ const SEEN_KEY = 'cb_seen_v1';
 const CHUNK = 80; // rows rendered at a time
 
 const DEFAULTS = Object.freeze({
-    view: 'normal',      // compact | normal | detail
+    view: 'normal',      // compact | normal | detail | gallery
     sort: 'recent',      // recent | character | name | size
     merge: true,         // one row per story
     pins: Object.freeze({}),
@@ -29,6 +29,7 @@ const DEFAULTS = Object.freeze({
     topbar: true,        // icon in the top bar
     topbarLook: null,    // filled from TOP_DEFAULT
     scheme: 'theme',     // theme | light | dark — colours of the browser window
+    gallerySize: 'large', // large | compact — cover size in the gallery
 });
 
 const ctx = () => SillyTavern.getContext();
@@ -616,6 +617,7 @@ const VIEWS = [
     ['compact', 'fa-solid fa-bars', 'กะทัดรัด — ชื่อแชทอย่างเดียว'],
     ['normal', 'fa-solid fa-list', 'ปกติ — ตัวอย่างเนื้อหา 2 บรรทัด'],
     ['detail', 'fa-solid fa-align-left', 'ละเอียด — อ่านข้อความล่าสุดได้ยาว'],
+    ['gallery', 'fa-solid fa-table-cells-large', 'แกลเลอรี — ปกการ์ด แตะเพื่อดูรายละเอียดและแชทของการ์ดนั้น'],
 ];
 const SORTS = [['recent', 'ล่าสุด'], ['character', 'ตัวละคร'], ['name', 'ชื่อ'], ['size', 'ยาวสุด']];
 
@@ -632,8 +634,16 @@ const ui = {
     history: new Map(),   // key → loaded recent messages (detail view)
     entries: [],
     shown: 0,
+    shownN: 0,          // chats on screen, for the counter in the title
     observer: null,
     busy: false,
+    // gallery
+    cards: [],          // cards on the grid, in order (also prev / next on a card page)
+    card: null,         // "type|entity" of the card page on screen, or null for the grid
+    gridTop: 0,         // grid scroll position, restored on the way back
+    noteOpen: false,    // creator's note shown in full
+    animate: false,     // tiles fade in one after another on the next grid render (not on every refresh)
+    imgObserver: null,
 
     setLoading(on) {
         this.root?.querySelector('.cb_spin')?.toggleAttribute('hidden', !on);
@@ -642,19 +652,48 @@ const ui = {
     render() {
         if (!this.root) return;
         const s = settings();
+        const gallery = s.view === 'gallery';
         this.root.dataset.view = s.view;
         this.root.classList.toggle('cb_selecting', this.selecting);
-        this.entries = buildEntries(data.chats, {
-            sort: s.sort, merge: s.merge, query: this.query, filter: this.filter,
-            entity: this.entity, persona: this.persona, pins: s.pins, unreadOf,
-        });
+        const opts = { query: this.query, filter: this.filter, entity: this.entity, persona: this.persona, pins: s.pins, unreadOf };
+        let card = null;
+        if (gallery) {
+            this.cards = buildCards(data.chats, { ...opts, sort: s.sort, extraText: cardSearchText });
+            // A card page lists every chat of that card, whatever the grid is filtered by.
+            if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf })[0] ?? null;
+            if (!card) this.card = null;
+            this.entries = card
+                ? buildEntries(data.chats, { sort: s.sort === 'character' ? 'recent' : s.sort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
+                : [];
+            this.shownN = card ? card.count : this.cards.reduce((n, x) => n + x.count, 0);
+        } else {
+            this.card = null;
+            this.entries = buildEntries(data.chats, { ...opts, sort: s.sort, merge: s.merge });
+            this.shownN = this.entries.filter(e => e.kind === 'chat').length;
+        }
+        this.root.classList.toggle('cb_oncard', !!card);
         this.renderControls();
         const list = this.root.querySelector('.cb_list');
         const top = list.scrollTop;
         this.observer?.disconnect();
+        this.imgObserver?.disconnect();
         this.shown = 0;
         list.replaceChildren();
-        if (!this.entries.length) {
+        if (card) {
+            list.innerHTML = this.cardHtml(card);
+            if (this.entries.length) this.more();
+            this.fitNote();
+        } else if (gallery) {
+            const anim = this.animate && this.cards.length ? ' cb_anim' : '';
+            if (anim) this.animate = false;
+            const size = s.gallerySize === 'compact' ? 'compact' : 'large';
+            const sizeBtn = (id, icon, tip) => `<button data-gsize="${id}" class="${size === id ? 'cb_on' : ''}" title="${tip}" aria-label="${tip}"><i class="${icon}"></i></button>`;
+            list.innerHTML = this.cards.length
+                ? `<div class="cb_gridbar"><span>${this.cards.length} การ์ด</span><div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div>
+                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.map((x, i) => this.tileHtml(x, i)).join('')}</div>`
+                : this.emptyHtml();
+            this.watchCovers();
+        } else if (!this.entries.length) {
             list.innerHTML = this.emptyHtml();
         } else {
             this.more();
@@ -823,6 +862,106 @@ const ui = {
         return `<div class="cb_history">${h.map(m => `<div class="cb_hmsg${m.user ? ' cb_huser' : ''}"><b>${esc(m.name)}</b><span>${esc(m.text)}</span></div>`).join('')}</div>`;
     },
 
+    // ------------------------------------------------ gallery
+
+    /** A cover: the small thumbnail at once (blurred), the full picture over it once loaded. */
+    coverHtml(m, lazy = true) {
+        const img = (full, small) => `<img class="cb_thumb" src="${esc(small)}" alt="" decoding="async"><img class="cb_full" ${lazy ? 'data-src' : 'src'}="${esc(full)}" alt="" decoding="async">`;
+        if (m.collage) {
+            return `<div class="cb_tcollage" data-n="${m.collage.length}">${m.collage.map(x => `<div>${img(x.full, x.thumb)}</div>`).join('') || '<i class="fa-solid fa-users"></i>'}</div>`;
+        }
+        return img(m.full, m.thumb);
+    },
+
+    tileHtml(card, i) {
+        const m = cardMeta(card.id);
+        const cur = currentKey();
+        const isOpen = card.chats.some(c => c.key === cur);
+        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0" style="--i:${Math.min(i, 40)}" aria-label="${esc(card.name)} · ${card.count} แชท">
+            <div class="cb_cover">${this.coverHtml(m)}</div>
+            <div class="cb_tiletop">
+                ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
+                ${card.pinned ? '<span class="cb_tmark" title="มีแชทที่ปักหมุด"><i class="fa-solid fa-thumbtack"></i></span>' : ''}
+                ${card.type === 'group' ? '<span class="cb_tmark" title="กลุ่ม"><i class="fa-solid fa-users"></i></span>' : ''}
+                <span class="cb_tspace"></span>
+                ${card.unread ? `<span class="cb_badge" title="ข้อความใหม่">+${card.unread > 999 ? '999' : card.unread}</span>` : ''}
+            </div>
+            <div class="cb_tileinfo">
+                <b>${esc(card.name)}</b>
+                <span>${isOpen ? '<em>เปิดอยู่</em> · ' : ''}${card.count} แชท · ${esc(relTime(card.last))}</span>
+            </div>
+        </div>`;
+    },
+
+    cardHtml(card) {
+        const m = cardMeta(card.id);
+        const i = this.cards.findIndex(x => x.id === card.id);
+        const prev = i > 0 ? this.cards[i - 1] : null;
+        const next = i >= 0 && i < this.cards.length - 1 ? this.cards[i + 1] : null;
+        const cur = currentKey();
+        const isOpen = card.chats.some(c => c.key === cur);
+        const step = (d, x) => `<button class="cb_iconbtn cb_step" data-step="${d}"${x ? ` title="${esc(x.name)}"` : ' disabled'} aria-label="${d < 0 ? 'การ์ดก่อนหน้า' : 'การ์ดถัดไป'}"><i class="fa-solid fa-chevron-${d < 0 ? 'left' : 'right'}"></i></button>`;
+        const tagStyle = t => (t.color ? ` style="--tag-bg:${esc(t.color)};${t.color2 ? `--tag-fg:${esc(t.color2)};` : ''}"` : '');
+        // the bar is its own row of the list, so it stays on top while the chats scroll by
+        return `<div class="cb_cardbar" data-cardpage="${esc(card.id)}">
+                <button class="cb_back" data-back="1"><i class="fa-solid fa-chevron-left"></i><span>การ์ดทั้งหมด</span></button>
+                <span class="cb_cardpos">${i >= 0 ? `${i + 1} / ${this.cards.length}` : ''}</span>
+                ${step(-1, prev)}${step(1, next)}
+            </div>
+            <div class="cb_card" data-cardpage="${esc(card.id)}">
+            <div class="cb_hero">
+                <img class="cb_herobg" src="${esc(m.thumb || m.collage?.[0]?.thumb || '')}" alt="" aria-hidden="true">
+                <button class="cb_heroimg" data-zoom="1" title="ดูรูปเต็ม" aria-label="ดูรูปเต็ม">${this.coverHtml(m, false)}</button>
+                <div class="cb_heroinfo">
+                    <h3>${m.fav ? '<i class="fa-solid fa-star cb_favstar" title="ตัวละครโปรด"></i>' : ''}${esc(card.name)}</h3>
+                    <div class="cb_herosub">
+                        ${m.creator ? `<span title="ผู้สร้างการ์ด"><i class="fa-solid fa-feather-pointed"></i>${esc(m.creator)}</span>` : ''}
+                        ${m.version ? `<span title="เวอร์ชันการ์ด">v${esc(m.version)}</span>` : ''}
+                        <span><i class="fa-regular fa-comments"></i>${card.count} แชท</span>
+                        <span><i class="fa-regular fa-message"></i>${card.total.toLocaleString('th-TH')} ข้อความ</span>
+                        ${card.last ? `<span title="${esc(fullTime(card.last))}"><i class="fa-regular fa-clock"></i>${esc(relTime(card.last))}</span>` : ''}
+                    </div>
+                    ${m.members?.length ? `<div class="cb_members">${m.members.map(x => `<span title="${esc(x.name)}"><img src="${esc(x.thumb)}" alt="" loading="lazy">${esc(x.name)}</span>`).join('')}</div>` : ''}
+                    ${m.tags.length ? `<div class="cb_tags">${m.tags.map(t => `<button class="cb_tag" data-tag="${esc(t.name)}"${tagStyle(t)} title="ค้นหาการ์ดที่มีแท็กนี้">${esc(t.name)}</button>`).join('')}</div>` : ''}
+                    <button class="cb_btn cb_primary cb_continue" data-continue="${esc(card.head.key)}"><i class="fa-solid ${isOpen ? 'fa-eye' : 'fa-play'}"></i>${isOpen ? 'กลับไปที่แชท' : 'คุยต่อแชทล่าสุด'}</button>
+                </div>
+            </div>
+            ${m.note ? `<div class="cb_cnote${this.noteOpen ? ' cb_open' : ''}">
+                <div class="cb_cnotehead"><i class="fa-solid fa-quote-left"></i>Creator's note</div>
+                <div class="cb_cnotetext">${esc(m.note)}</div>
+                <button class="cb_notemore" data-note="1"${this.noteOpen ? '' : ' hidden'}>${this.noteOpen ? 'ย่อ<i class="fa-solid fa-chevron-up"></i>' : 'อ่านต่อ<i class="fa-solid fa-chevron-down"></i>'}</button>
+            </div>` : ''}
+            <div class="cb_cardchats"><i class="fa-regular fa-comments"></i>แชทของการ์ดนี้<span>${card.count}</span></div>
+            ${this.entries.length ? '' : '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ไม่มีแชท</span></div>'}
+        </div>`;
+    },
+
+    /** Show "อ่านต่อ" only when the note is longer than its folded height. */
+    fitNote() {
+        const box = this.root?.querySelector('.cb_cnote');
+        if (!box || this.noteOpen) return;
+        requestAnimationFrame(() => {
+            const text = box.querySelector('.cb_cnotetext');
+            const more = box.querySelector('.cb_notemore');
+            if (text && more) more.hidden = text.scrollHeight <= text.clientHeight + 2;
+        });
+    },
+
+    /** Full pictures load near the screen and are let go far from it, so a long gallery stays light. */
+    watchCovers() {
+        const list = this.root.querySelector('.cb_list');
+        this.imgObserver ??= new IntersectionObserver(es => {
+            for (const x of es) {
+                for (const img of x.target.querySelectorAll('img.cb_full')) {
+                    const has = img.hasAttribute('src');
+                    if (x.isIntersecting && !has) img.src = img.dataset.src;
+                    else if (!x.isIntersecting && has) { img.removeAttribute('src'); img.classList.remove('cb_loaded'); }
+                }
+            }
+        }, { root: list, rootMargin: '1000px 0px' });
+        list.querySelectorAll('.cb_tile').forEach(t => this.imgObserver.observe(t));
+    },
+
     renderControls() {
         const r = this.root;
         const s = settings();
@@ -842,11 +981,11 @@ const ui = {
             chip('pinned', 'ปักหมุด', pinsN, 'fa-solid fa-thumbtack'),
             groupsN ? chip('group', 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
             ent ? `<button class="cb_chip cb_on cb_entchip" data-entity="">${esc(ent.entityName)}<i class="fa-solid fa-xmark"></i></button>`
-                : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>เฉพาะ ${esc(curChat.entityName)}</button>` : '',
+                : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>${s.view === 'gallery' ? '' : 'เฉพาะ '}${esc(curChat.entityName)}</button>` : '',
             personas.length > 1 ? `<label class="cb_chip cb_selchip${this.persona ? ' cb_on' : ''}"><i class="fa-solid fa-masks-theater"></i><select class="cb_persona_sel"><option value="">ทุก persona</option>${personas.map(([id, n]) => `<option value="${esc(id)}"${this.persona === id ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '',
             `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมภาคต่อ</button>`,
         ].join('');
-        const shownChats = this.entries.filter(e => e.kind === 'chat').length;
+        const shownChats = this.shownN;
         r.querySelector('.cb_total').textContent = shownChats === data.chats.length || !data.chats.length ? `${data.chats.length}` : `${shownChats}/${data.chats.length}`;
         this.renderSync();
     },
@@ -893,6 +1032,127 @@ function chatFromRow(row) {
     return row ? data.byKey.get(row.dataset.key) : null;
 }
 
+// ---------------------------------------------------------------- gallery cards
+
+const fullAvatar = file => `/characters/${encodeURIComponent(file)}`;
+
+function tagsOf(entity, ch) {
+    const c = ctx();
+    const own = (c.tagMap?.[entity] || []).map(id => (c.tags || []).find(t => t.id === id)).filter(t => t?.name);
+    if (own.length) return own.map(t => ({ name: String(t.name), color: t.color || '', color2: t.color2 || '' }));
+    // tags written in the card itself, when SillyTavern's own tags were not imported
+    const raw = ch?.data?.tags ?? ch?.tags;
+    return Array.isArray(raw) ? [...new Set(raw.map(String).map(x => x.trim()).filter(Boolean))].slice(0, 30).map(name => ({ name })) : [];
+}
+
+/** What the gallery shows of a character or group: pictures, tags, creator and creator's note. */
+function cardMeta(id) {
+    const bar = id.indexOf('|');
+    const type = id.slice(0, bar), entity = id.slice(bar + 1);
+    if (type === 'group') {
+        const g = groupOf(entity);
+        const members = (g?.members || []).map(a => charOf(a)).filter(Boolean);
+        const url = g?.avatar_url;
+        const own = url && /^(data:|https?:|\/)/.test(url) ? url : '';
+        return {
+            type, entity,
+            full: own, thumb: own,
+            collage: own ? null : members.slice(0, 4).map(ch => ({ full: fullAvatar(ch.avatar), thumb: thumb('avatar', ch.avatar) })),
+            members: members.map(ch => ({ name: ch.name, thumb: thumb('avatar', ch.avatar) })),
+            tags: tagsOf(entity, null),
+            creator: '', version: '', note: '', fav: g?.fav === true || g?.fav === 'true',
+        };
+    }
+    const ch = charOf(entity);
+    const d = ch?.data || {};
+    return {
+        type, entity,
+        full: fullAvatar(entity), thumb: thumb('avatar', entity),
+        collage: null, members: null,
+        tags: tagsOf(entity, ch),
+        creator: String(d.creator ?? '').trim(),
+        version: String(d.character_version ?? '').trim(),
+        note: noteText(d.creator_notes || ch?.creatorcomment || '', { char: ch?.name, user: ctx().name1 }),
+        fav: ch?.fav === true || ch?.fav === 'true',
+    };
+}
+
+/** Tags and creator, so the gallery search finds cards by them too. */
+function cardSearchText(id) {
+    const m = cardMeta(id);
+    return `${m.tags.map(t => t.name).join('\n')}\n${m.creator}`;
+}
+
+function openCard(id) {
+    const list = ui.root?.querySelector('.cb_list');
+    if (!list || !id) return;
+    if (!ui.card) ui.gridTop = list.scrollTop;
+    ui.card = id;
+    ui.noteOpen = false;
+    ui.render();
+    list.scrollTop = 0;
+    list.querySelector('.cb_card')?.classList.add('cb_enter');
+}
+
+function closeCard() {
+    const list = ui.root?.querySelector('.cb_list');
+    if (!list || !ui.card) return;
+    const from = ui.card;
+    ui.card = null;
+    ui.render();
+    list.scrollTop = ui.gridTop;
+    const tile = list.querySelector(`.cb_tile[data-card="${CSS.escape(from)}"]`);
+    if (tile) { tile.classList.add('cb_back_here'); tile.focus({ preventScroll: true }); }
+}
+
+/** Big covers or small ones; the card at the top of the screen stays at the top. */
+function setGallerySize(size) {
+    const s = settings();
+    if (s.gallerySize === size) return;
+    const list = ui.root.querySelector('.cb_list');
+    const top = list.getBoundingClientRect().top;
+    const first = [...list.querySelectorAll('.cb_tile')].find(t => t.getBoundingClientRect().bottom > top + 8);
+    const atTop = list.scrollTop < 40;
+    s.gallerySize = size;
+    saveSettings();
+    ui.animate = atTop;
+    ui.render();
+    const again = first && list.querySelector(`.cb_tile[data-card="${CSS.escape(first.dataset.card)}"]`);
+    if (atTop || !again) list.scrollTop = 0;
+    else list.scrollTop += again.getBoundingClientRect().top - list.getBoundingClientRect().top - 8;
+}
+
+/** Next or previous card on the grid's order (buttons, arrow keys, swiping sideways). */
+function stepCard(d) {
+    const i = ui.cards.findIndex(x => x.id === ui.card);
+    const next = i < 0 ? null : ui.cards[i + d];
+    if (!next) return;
+    const list = ui.root.querySelector('.cb_list');
+    ui.card = next.id;
+    ui.noteOpen = false;
+    ui.render();
+    list.scrollTop = 0;
+    list.querySelector('.cb_card')?.classList.add(d > 0 ? 'cb_from_r' : 'cb_from_l');
+}
+
+/** The cover full screen; any tap closes it. */
+function zoomCover(id) {
+    const m = cardMeta(id);
+    const urls = m.collage?.length ? m.collage.map(x => x.full) : [m.full];
+    if (!urls[0]) return;
+    const layer = ui.root.querySelector('.cb_layer');
+    const el = document.createElement('div');
+    el.className = 'cb_lightbox';
+    el.setAttribute('role', 'dialog');
+    el.innerHTML = `<div class="cb_lbimgs" data-n="${urls.length}">${urls.map(u => `<img src="${esc(u)}" alt="">`).join('')}</div>
+        <button class="cb_iconbtn cb_lbx" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>`;
+    const close = () => { el.classList.add('cb_out'); setTimeout(() => el.remove(), 160); };
+    el._close = close;
+    el.addEventListener('click', close);
+    layer.append(el);
+    requestAnimationFrame(() => el.classList.add('cb_in'));
+}
+
 // theme colours, or a light / dark look that ignores the theme
 const SCHEMES = [
     ['theme', 'fa-solid fa-palette', 'สีตามธีม'],
@@ -917,6 +1177,7 @@ function applyScheme(root = ui.root) {
 function openBrowser() {
     if (ui.root) { ui.root.querySelector('.cb_search')?.focus(); return; }
     ui.query = '';
+    ui.animate = true;
     loadCache();
     importStPins();
     const s = settings();
@@ -978,6 +1239,9 @@ function closeBrowser() {
     ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
     ui.observer = null;
+    ui.imgObserver?.disconnect();
+    ui.imgObserver = null;
+    ui.card = null;
     ui.selecting = false;
     ui.selected.clear();
     ui.history.clear();
@@ -1051,10 +1315,18 @@ function wireBrowser(root) {
         clearTimeout(qTimer);
         qTimer = setTimeout(() => {
             if (ui.root !== root) return;   // closed before the debounce fired
-            ui.query = search.value; ui.render(); list.scrollTop = 0;
+            ui.query = search.value; ui.card = null; ui.render(); list.scrollTop = 0;
         }, 120);
     });
-    clearq.addEventListener('click', e => { e.preventDefault(); search.value = ''; clearq.hidden = true; ui.query = ''; ui.render(); search.focus(); });
+    clearq.addEventListener('click', e => { e.preventDefault(); search.value = ''; clearq.hidden = true; ui.query = ''; ui.card = null; ui.render(); search.focus(); });
+    const searchFor = text => {
+        search.value = text;
+        clearq.hidden = !text;
+        ui.query = text;
+        ui.card = null;
+        ui.render();
+        list.scrollTop = 0;
+    };
 
     root.querySelector('.cb_sort').addEventListener('click', e => {
         const b = e.target.closest('[data-sort]');
@@ -1063,21 +1335,27 @@ function wireBrowser(root) {
     });
     root.querySelector('.cb_view').addEventListener('click', e => {
         const b = e.target.closest('[data-view]');
-        if (!b) return;
-        s.view = b.dataset.view; saveSettings(); ui.render();
+        if (!b || b.dataset.view === s.view) return;
+        const toGallery = b.dataset.view === 'gallery' || s.view === 'gallery';
+        s.view = b.dataset.view; saveSettings(); ui.card = null; ui.animate = true; ui.render();
+        if (toGallery) list.scrollTop = 0;
     });
     root.querySelector('.cb_chips').addEventListener('click', e => {
         const b = e.target.closest('button');
         if (!b) return;
+        // in the gallery, the current character's chip goes straight to its card
+        if (s.view === 'gallery' && b.dataset.entity) { openCard(b.dataset.entity); return; }
         if (b.dataset.filter) ui.filter = ui.filter === b.dataset.filter && b.dataset.filter !== 'all' ? 'all' : b.dataset.filter;
         else if (b.dataset.entity !== undefined) ui.entity = b.dataset.entity || null;
         else if (b.dataset.merge) { s.merge = !s.merge; saveSettings(); }
+        if (!b.dataset.merge) { ui.card = null; ui.animate = true; }
         ui.render();
-        list.scrollTop = 0;
+        if (!ui.card) list.scrollTop = 0;
     });
     root.querySelector('.cb_chips').addEventListener('change', e => {
         if (!e.target.matches('.cb_persona_sel')) return;
         ui.persona = e.target.value || null;
+        ui.card = null;
         ui.render();
     });
 
@@ -1097,6 +1375,28 @@ function wireBrowser(root) {
 
     list.addEventListener('click', async e => {
         const t = e.target;
+        const tile = t.closest('.cb_tile');
+        if (tile) { openCard(tile.dataset.card); return; }
+        const gsize = t.closest('[data-gsize]');
+        if (gsize) { setGallerySize(gsize.dataset.gsize); return; }
+        const card = t.closest('[data-cardpage]');
+        if (card) {
+            const id = card.dataset.cardpage;
+            if (t.closest('[data-back]')) closeCard();
+            else if (t.closest('[data-step]')) stepCard(Number(t.closest('[data-step]').dataset.step));
+            else if (t.closest('[data-zoom]')) zoomCover(id);
+            else if (t.closest('[data-tag]')) searchFor(t.closest('[data-tag]').dataset.tag);
+            else if (t.closest('[data-continue]')) doOpen(data.byKey.get(t.closest('[data-continue]').dataset.continue));
+            else if (t.closest('[data-note]')) {
+                ui.noteOpen = !ui.noteOpen;
+                const box = card.querySelector('.cb_cnote');
+                box.classList.toggle('cb_open', ui.noteOpen);
+                const more = box.querySelector('.cb_notemore');
+                more.innerHTML = ui.noteOpen ? 'ย่อ<i class="fa-solid fa-chevron-up"></i>' : 'อ่านต่อ<i class="fa-solid fa-chevron-down"></i>';
+                if (!ui.noteOpen && box.getBoundingClientRect().top < list.getBoundingClientRect().top) box.scrollIntoView({ block: 'start' });
+            }
+            return;
+        }
         const sec = t.closest('.cb_section');
         if (sec) {
             const only = t.closest('[data-only]');
@@ -1130,6 +1430,25 @@ function wireBrowser(root) {
         pressTimer = setTimeout(() => { pressTimer = null; setSelecting(true); toggleSelect(pressKey); navigator.vibrate?.(15); }, 550);
     });
     const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
+
+    // Full covers fade in over their thumbnail once loaded.
+    list.addEventListener('load', e => { if (e.target.matches?.('img.cb_full')) e.target.classList.add('cb_loaded'); }, true);
+    list.addEventListener('error', e => { if (e.target.matches?.('img.cb_full') && e.target.hasAttribute('src')) e.target.classList.add('cb_failed'); }, true);
+
+    // On a card page, swiping sideways goes to the next / previous card.
+    let swipe = null;
+    list.addEventListener('touchstart', e => {
+        const p = e.touches[0];
+        swipe = ui.card && e.touches.length === 1 && !e.target.closest('.cb_parts, .cb_tags, .cb_members') ? { x: p.clientX, y: p.clientY, at: Date.now() } : null;
+    }, { passive: true });
+    list.addEventListener('touchend', e => {
+        if (!swipe || !ui.card) return;
+        const p = e.changedTouches[0];
+        const dx = p.clientX - swipe.x, dy = p.clientY - swipe.y;
+        const quick = Date.now() - swipe.at < 700;
+        swipe = null;
+        if (quick && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2) { cancelPress(); stepCard(dx < 0 ? 1 : -1); }
+    }, { passive: true });
     list.addEventListener('pointerup', cancelPress);
     list.addEventListener('pointercancel', cancelPress);
     list.addEventListener('scroll', cancelPress, { passive: true });
@@ -1146,14 +1465,23 @@ function wireBrowser(root) {
             e.stopPropagation();
             if (layer.firstChild) { layer.lastChild._close?.(); return; }
             if (ui.selecting) { setSelecting(false); return; }
+            if (ui.card) { closeCard(); return; }
             closeBrowser();
             return;
         }
         if (layer.firstChild) return;
         const inField = e.target.matches('input, select, textarea');
         if (e.key === '/' && !inField) { e.preventDefault(); search.focus(); search.select(); return; }
+        if (ui.card && !inField && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); stepCard(e.key === 'ArrowRight' ? 1 : -1); return; }
+        if (!ui.card && !inField && settings().view === 'gallery' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+            const tiles = [...list.querySelectorAll('.cb_tile')];
+            const i = tiles.indexOf(document.activeElement);
+            const next = tiles[i < 0 ? 0 : Math.max(0, Math.min(tiles.length - 1, i + (e.key === 'ArrowRight' ? 1 : -1)))];
+            if (next) { e.preventDefault(); next.focus(); }
+            return;
+        }
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            const rows = [...list.querySelectorAll('.cb_row')];
+            const rows = [...list.querySelectorAll('.cb_row, .cb_tile')];
             if (!rows.length) return;
             e.preventDefault();
             const i = rows.indexOf(document.activeElement);
@@ -1162,7 +1490,14 @@ function wireBrowser(root) {
             return;
         }
         if (e.key === 'Enter') {
-            if (e.target === search) { const first = list.querySelector('.cb_row'); if (first) doOpen(chatFromRow(first)); return; }
+            if (e.target === search) {
+                const tile = list.querySelector('.cb_tile');
+                if (tile) { openCard(tile.dataset.card); return; }
+                const first = list.querySelector('.cb_row');
+                if (first) doOpen(chatFromRow(first));
+                return;
+            }
+            if (e.target.matches?.('.cb_tile')) { e.preventDefault(); openCard(e.target.dataset.card); return; }
             const row = e.target.closest?.('.cb_row');
             if (row && e.target === row) { e.preventDefault(); ui.selecting ? toggleSelect(row.dataset.key) : doOpen(chatFromRow(row)); }
             const sec = e.target.closest?.('.cb_section.cb_foldable');
@@ -1240,10 +1575,11 @@ function openMenu(c, anchor) {
         ...(info?.size > 1 ? info.parts.filter(p => p.key !== c.key).reverse().map(p => [`part:${p.key}`, 'fa-solid fa-book-bookmark', `เปิดภาค ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId}`]) : []),
         ['pin', 'fa-solid fa-thumbtack', pinned ? 'เลิกปักหมุด' : 'ปักหมุด'],
         ['rename', 'fa-solid fa-pen', 'เปลี่ยนชื่อ'],
+        ['export', 'fa-solid fa-file-export', 'ส่งออกไฟล์แชท…'],
         ['read', 'fa-solid fa-check-double', 'ทำเครื่องหมายว่าอ่านแล้ว', unreadOf(c) > 0],
         ['link', 'fa-solid fa-link', c.prev ? 'เปลี่ยนภาคก่อนหน้า…' : 'ตั้งเป็นภาคต่อของ…'],
         ['unlink', 'fa-solid fa-link-slash', 'ยกเลิกการผูกภาคต่อ', !!c.prev],
-        ['only', 'fa-solid fa-filter', `ดูเฉพาะแชทของ ${c.entityName}`],
+        ['only', settings().view === 'gallery' ? 'fa-solid fa-id-card' : 'fa-solid fa-filter', settings().view === 'gallery' ? `ดูการ์ด ${c.entityName}` : `ดูเฉพาะแชทของ ${c.entityName}`, !(settings().view === 'gallery' && ui.card === `${c.type}|${c.entity}`)],
         ['delete', 'fa-solid fa-trash', 'ลบแชท', true, true],
     ].filter(x => x[3] !== false);
     const menu = document.createElement('div');
@@ -1284,7 +1620,11 @@ async function menuAction(act, c) {
     if (act.startsWith('part:')) return doOpen(data.byKey.get(act.slice(5)));
     if (act === 'pin') { togglePin([c.key], !settings().pins[c.key]); ui.render(); return; }
     if (act === 'read') { markSeen(c.key, c.count); ui.render(); updateLauncherBadge(); return; }
-    if (act === 'only') { ui.entity = `${c.type}|${c.entity}`; ui.render(); return; }
+    if (act === 'only') {
+        if (settings().view === 'gallery') { openCard(`${c.type}|${c.entity}`); return; }
+        ui.entity = `${c.type}|${c.entity}`; ui.render(); return;
+    }
+    if (act === 'export') return openExport(c);
     if (act === 'rename') {
         const name = await sheetPrompt({ title: 'เปลี่ยนชื่อแชท', value: c.chatId, ok: 'เปลี่ยนชื่อ', hint: `${esc(c.entityName)} · แชทที่อ้างถึงชื่อนี้ (ภาคต่อ กิ่ง) จะถูกแก้ตาม${cab()?.dropboxConnected?.() ? ' · ไฟล์ใน Dropbox ย้ายไปชื่อใหม่ และเครื่องอื่นเปลี่ยนตามตอนซิงค์' : ''}` });
         if (name == null) return;
@@ -1361,6 +1701,129 @@ async function loadHistory(c) {
         ui.history.set(c.key, `โหลดไม่สำเร็จ: ${errText(e)}`);
     }
     ui.render();
+}
+
+// ---------------------------------------------------------------- export
+
+/** Hand a file to the user: the system share sheet where it can take files (phones), else a download. */
+async function saveFile(name, text, { share = false } = {}) {
+    const type = name.endsWith('.txt') ? 'text/plain;charset=utf-8' : 'application/octet-stream';
+    if (share) {
+        const file = new File([text], name, { type: 'text/plain' });
+        if (navigator.canShare?.({ files: [file] })) {
+            try { await navigator.share({ files: [file], title: name }); return true; } catch (e) { if (e?.name === 'AbortError') return false; }
+        }
+    }
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: name, rel: 'noopener' });
+    a.style.display = 'none';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return true;
+}
+
+/** Messages of a chat as readable text: who, when, and what was said. */
+function chatToText(c, arr, rx, clean) {
+    const msgs = arr.filter(m => m && typeof m === 'object' && 'mes' in m);
+    const avatar = c.type === 'character' ? c.entity : null;
+    const out = [];
+    msgs.forEach((m, i) => {
+        const raw = String(m.mes ?? '');
+        const text = clean
+            ? storyOf(raw, rx, { avatar: m.is_user ? null : avatar, user: !!m.is_user, name: c.entityName, depth: msgs.length - 1 - i })
+            : raw.trim();
+        if (!text) return;
+        const when = fullTime(toMs(m.send_date, ctx().timestampToMoment));
+        out.push(`【${m.name || (m.is_user ? 'User' : c.entityName)}】${when ? `  ${when}` : ''}\n${text}`);
+    });
+    return out.join('\n\n');
+}
+
+function exportHead(title, lines) {
+    return `${title}\n${lines.filter(Boolean).join(' · ')}\n${'═'.repeat(40)}\n\n`;
+}
+
+async function openExport(c) {
+    const info = linkInfo.get(c.key);
+    const parts = info?.size > 1 ? info.parts : [c];
+    const hasStory = parts.length > 1;
+    let format = 'jsonl', clean = true;
+    // Read the chats as the sheet opens, so the share button runs straight from the tap
+    // (Safari shares only from a tap, not after waiting on the network).
+    const files = new Map(); // key → chat file as an array
+    const loading = (async () => {
+        if ([c, ...parts].some(p => p.key === currentKey())) { try { await ctx().saveChat?.(); } catch { /* saved on its own anyway */ } }
+        await loadRegex();
+        for (const p of hasStory ? parts : [c]) files.set(p.key, await readChat(p));
+    })();
+    let ready = false;
+    loading.then(() => { ready = true; }, () => {});
+    const option = (id, icon, title, sub) => `<button class="cb_pick cb_expopt${format === id ? ' cb_on' : ''}" data-fmt="${id}">
+        <i class="${icon}"></i><span><b>${title}</b><small>${sub}</small></span><i class="fa-solid fa-circle-check cb_tick"></i></button>`;
+    const canShare = !!navigator.canShare && matchMedia('(pointer: coarse)').matches;
+    const build = () => {
+        const rx = displayRegexer();
+        const now = fullTime(Date.now());
+        if (format === 'jsonl') {
+            const arr = files.get(c.key) || [];
+            return { name: fileName(c.chatId, 'jsonl'), text: `${arr.map(x => JSON.stringify(x)).join('\n')}\n` };
+        }
+        const list = format === 'story' ? parts : [c];
+        const total = list.reduce((n, p) => n + (p.count || 0), 0);
+        let text = exportHead(format === 'story' ? `${c.entityName} — ทั้งเรื่อง (${list.length} ภาค)` : c.chatId,
+            [c.entityName, `${total} ข้อความ`, c.personaName ? `persona: ${c.personaName}` : '', `ส่งออกเมื่อ ${now}`]);
+        text += list.map(p => {
+            const body = chatToText(p, files.get(p.key) || [], rx, clean);
+            return format === 'story' ? `──── ภาค ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId} ────\n\n${body}` : body;
+        }).join('\n\n\n');
+        return { name: fileName(format === 'story' ? `${c.entityName} - ทั้งเรื่อง ${list.length} ภาค` : c.chatId, 'txt'), text: `${text}\n` };
+    };
+    const run = async (a, btn, share) => {
+        try {
+            if (!ready) btn.disabled = true;
+            await loading;
+            const f = build();
+            if (await saveFile(f.name, f.text, { share })) { toast.ok(`ส่งออก "${f.name}" แล้ว`); a.close(true); }
+        } catch (e) {
+            console.error(LOG, e);
+            toast.err(`ส่งออกไม่สำเร็จ: ${errText(e)}`);
+            btn.disabled = false;
+        }
+    };
+    await sheet({
+        title: 'ส่งออกแชท',
+        body: `<div class="cb_delone">${ui.avatarHtml(c)}<div><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${hasStory ? ` · ภาค ${info.part} จาก ${parts.length}` : ''}</span></div></div>
+            <div class="cb_picklist cb_expopts">
+                ${option('jsonl', 'fa-solid fa-file-code', 'ไฟล์แชท .jsonl', 'ไฟล์ต้นฉบับของ SillyTavern ครบทุกอย่าง นำเข้ากลับได้ที่ Manage chat files → Import')}
+                ${option('txt', 'fa-solid fa-file-lines', 'ข้อความอ่านง่าย .txt', 'ชื่อ เวลา และข้อความ ทีละข้อความ เปิดอ่านในแอปไหนก็ได้')}
+                ${hasStory ? option('story', 'fa-solid fa-book', `ทั้งเรื่อง ${parts.length} ภาค .txt`, 'รวมทุกภาคของเรื่องนี้เป็นไฟล์เดียว เรียงจากภาคแรก') : ''}
+            </div>
+            <label class="cb_expclean" hidden><input type="checkbox" checked><span>เหลือแค่บทบรรยายและบทพูด<small>ตัด &lt;think&gt; แผงสเตตัส HTML และข้อมูลระบบออก</small></span></label>
+            <p class="cb_note cb_expstate"><i class="fa-solid fa-circle-notch fa-spin"></i>กำลังอ่านแชท…</p>`,
+        buttons: [
+            { label: 'ยกเลิก', run: a => a.close(null) },
+            ...(canShare ? [{ label: '<i class="fa-solid fa-arrow-up-from-bracket"></i>แชร์ / บันทึกลงไฟล์', run: (a, b) => run(a, b, true) }] : []),
+            { label: '<i class="fa-solid fa-download"></i>ดาวน์โหลด', primary: true, run: (a, b) => run(a, b, false) },
+        ],
+        onMount: a => {
+            const cleanBox = a.body.querySelector('.cb_expclean');
+            a.body.addEventListener('click', e => {
+                const b = e.target.closest('[data-fmt]');
+                if (!b) return;
+                format = b.dataset.fmt;
+                a.body.querySelectorAll('[data-fmt]').forEach(x => x.classList.toggle('cb_on', x === b));
+                cleanBox.hidden = format === 'jsonl';
+            });
+            cleanBox.querySelector('input').addEventListener('change', e => { clean = e.target.checked; });
+            const state = a.body.querySelector('.cb_expstate');
+            loading.then(
+                () => { state.remove(); },
+                e => { state.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i>อ่านแชทไม่สำเร็จ: ${esc(errText(e))}`; state.classList.add('cb_warn'); },
+            );
+        },
+    });
 }
 
 // ---------------------------------------------------------------- sheets (small dialogs inside the panel)

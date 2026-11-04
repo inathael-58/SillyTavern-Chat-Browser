@@ -378,3 +378,79 @@ export function renameInMeta(meta, oldId, newId) {
     if (meta.main_chat === oldId) { meta.main_chat = newId; changed = true; }
     return changed;
 }
+
+// ---------------------------------------------------------------- gallery
+
+/**
+ * One card per character / group, for the gallery.
+ *   extraText(id): more searchable text for a card (tags, creator) — id is "type|entity"
+ * Search matches a card when every word is somewhere in its name, its extra text or any of its chats.
+ * Returns [{ id, type, entity, name, head, chats, count, total, last, unread, pinned }]
+ */
+export function buildCards(chats, { sort = 'recent', query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0, extraText = () => '' } = {}) {
+    const q = String(query ?? '').trim().toLowerCase();
+    const cards = new Map();
+    for (const c of chats) {
+        const id = `${c.type}|${c.entity}`;
+        if (entity && id !== entity) continue;
+        if (filter === 'group' && c.type !== 'group') continue;
+        let card = cards.get(id);
+        if (!card) cards.set(id, card = { id, type: c.type, entity: c.entity, name: c.entityName, head: c, chats: [], count: 0, total: 0, last: 0, unread: 0, pinned: false, personas: new Set() });
+        card.chats.push(c);
+        card.count++;
+        card.total += c.count || 0;
+        card.unread += unreadOf(c);
+        card.pinned ||= !!pins[c.key];
+        if (c.persona) card.personas.add(c.persona);
+        if ((c.last || 0) > card.last) { card.last = c.last || 0; card.head = c; }
+    }
+    let out = [...cards.values()];
+    if (persona) out = out.filter(x => x.personas.has(persona));
+    if (filter === 'unread') out = out.filter(x => x.unread > 0);
+    if (filter === 'pinned') out = out.filter(x => x.pinned);
+    if (q) {
+        const words = q.split(/\s+/);
+        out = out.filter(x => {
+            const hay = `${x.name}\n${extraText(x.id) ?? ''}\n${x.chats.map(searchText).join('\n')}`.toLowerCase();
+            return words.every(w => hay.includes(w));
+        });
+    }
+    const byRecent = (a, b) => b.last - a.last;
+    const cmp = {
+        recent: byRecent,
+        name: (a, b) => compareText(a.name, b.name) || byRecent(a, b),
+        character: (a, b) => compareText(a.name, b.name) || byRecent(a, b),
+        size: (a, b) => b.total - a.total || byRecent(a, b),
+    }[sort] ?? byRecent;
+    for (const x of out) delete x.personas;
+    return out.sort(cmp);
+}
+
+/**
+ * A creator's note (HTML or markdown, as cards write it) as plain text with its paragraphs:
+ * no tags, styles, scripts or images. {{char}} / {{user}} are filled in when names are given.
+ */
+export function noteText(text, { char = '', user = '' } = {}) {
+    let t = String(text ?? '')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<(script|style|svg|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|h[1-6]|blockquote|tr|section|article)\s*>/gi, '\n')
+        .replace(/<li\b[^>]*>/gi, '• ')
+        .replace(ANY_TAG_RE, '');
+    t = decodeEntities(t)
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')                     // images
+        .replace(/\[([^\]]+)\]\((?:https?:|\/)[^)]*\)/g, '$1')    // links → their text
+        .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
+        .replace(/^\s*#{1,6}\s+/gm, '')
+        .replace(/^\s*>+\s?/gm, '');
+    if (char) t = t.replace(/\{\{char\}\}/gi, char);
+    if (user) t = t.replace(/\{\{user\}\}/gi, user);
+    return t.replace(/[ \t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** A name that is safe as a downloaded file name on every system. */
+export function fileName(name, ext) {
+    const base = String(name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120) || 'chat';
+    return `${base}.${ext}`;
+}
