@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.2'; // keep in sync with manifest.json
+const VERSION = '1.4.3'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -991,7 +991,7 @@ const ui = {
             groupsN ? chip('group', 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
             ent ? `<button class="cb_chip cb_on cb_entchip" data-entity="">${esc(ent.entityName)}<i class="fa-solid fa-xmark"></i></button>`
                 : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>${s.view === 'gallery' ? '' : 'เฉพาะ '}${esc(curChat.entityName)}</button>` : '',
-            personas.length > 1 ? `<label class="cb_chip cb_selchip${this.persona ? ' cb_on' : ''}"><i class="fa-solid fa-masks-theater"></i><select class="cb_persona_sel"><option value="">ทุก persona</option>${personas.map(([id, n]) => `<option value="${esc(id)}"${this.persona === id ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : '',
+            personas.length > 1 ? `<button class="cb_chip cb_personachip${this.persona ? ' cb_on' : ''}" data-personas="1" aria-haspopup="menu">${this.persona ? `<img src="${esc(thumb('persona', this.persona))}" alt="">` : '<i class="fa-solid fa-masks-theater"></i>'}<b>${esc(this.persona ? personas.find(([id]) => id === this.persona)?.[1] ?? this.persona : 'ทุก persona')}</b><i class="fa-solid fa-chevron-down cb_chipchev"></i></button>` : '',
             `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมภาคต่อ</button>`,
         ].join('');
         const shownChats = this.shownN;
@@ -1474,6 +1474,7 @@ function wireBrowser(root) {
     root.querySelector('.cb_chips').addEventListener('click', e => {
         const b = e.target.closest('button');
         if (!b) return;
+        if (b.dataset.personas) { openPersonaMenu(b); return; }
         // in the gallery, the current character's chip goes straight to its card
         if (s.view === 'gallery' && b.dataset.entity) { openCard(b.dataset.entity); return; }
         if (b.dataset.filter) ui.filter = ui.filter === b.dataset.filter && b.dataset.filter !== 'all' ? 'all' : b.dataset.filter;
@@ -1482,12 +1483,6 @@ function wireBrowser(root) {
         if (!b.dataset.merge) { ui.card = null; ui.animate = true; }
         ui.render();
         if (!ui.card) list.scrollTop = 0;
-    });
-    root.querySelector('.cb_chips').addEventListener('change', e => {
-        if (!e.target.matches('.cb_persona_sel')) return;
-        ui.persona = e.target.value || null;
-        ui.card = null;
-        ui.render();
     });
 
     root.querySelector('.cb_cardnav').addEventListener('click', e => {
@@ -1720,8 +1715,6 @@ function deleteNote() {
 // ---------------------------------------------------------------- row menu
 
 function openMenu(c, anchor) {
-    const layer = ui.root.querySelector('.cb_layer');
-    layer.querySelector('.cb_menu')?._close?.();
     const s = settings();
     const pinned = !!s.pins[c.key];
     const info = linkInfo.get(c.key);
@@ -1738,37 +1731,73 @@ function openMenu(c, anchor) {
         ['only', settings().view === 'gallery' ? 'fa-solid fa-id-card' : 'fa-solid fa-filter', settings().view === 'gallery' ? `ดูการ์ด ${c.entityName}` : `ดูเฉพาะแชทของ ${c.entityName}`, !(settings().view === 'gallery' && ui.card === `${c.type}|${c.entity}`)],
         ['delete', 'fa-solid fa-trash', 'ลบแชท', true, true],
     ].filter(x => x[3] !== false);
+    const head = `<div class="cb_menuhead"><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${info?.size > 1 ? ` · ภาค ${info.part} จาก ${info.size} แชท` : ''}</span></div>`;
+    popMenu(head + items.map(([id, icon, label, , danger]) => `<button role="menuitem" data-act="${esc(id)}"${danger ? ' class="cb_danger"' : ''}><i class="${icon}"></i>${esc(label)}</button>`).join(''), anchor, async act => {
+        try { await menuAction(act, c); } catch (err) { console.error(LOG, err); toast.err(errText(err)); }
+    });
+}
+
+/** Which persona's chats to show: the browser's own menu, not the system's select list. */
+function openPersonaMenu(anchor) {
+    const counts = new Map();
+    const names = new Map();
+    for (const c of data.chats) {
+        if (!c.persona) continue;
+        counts.set(c.persona, (counts.get(c.persona) || 0) + 1);
+        names.set(c.persona, c.personaName || c.persona);
+    }
+    const list = [...names.entries()].sort((a, b) => compareText(a[1], b[1]));
+    const row = (id, ava, label, n) => `<button role="menuitemradio" aria-checked="${(ui.persona || '') === id}" data-act="${esc(id)}"${(ui.persona || '') === id ? ' class="cb_on"' : ''}>
+        ${ava}<span class="cb_mname">${esc(label)}</span>${n ? `<small>${n}</small>` : ''}<i class="fa-solid fa-check cb_mtick"></i></button>`;
+    popMenu(`<div class="cb_menuhead"><b>Persona</b><span>แสดงเฉพาะแชทที่ผูกกับ persona ที่เลือก</span></div>`
+        + row('', '<i class="fa-solid fa-masks-theater"></i>', 'ทุก persona', 0)
+        + list.map(([id, name]) => row(id, `<img class="cb_mava" src="${esc(thumb('persona', id))}" alt="" loading="lazy">`, name, counts.get(id))).join(''),
+    anchor, id => {
+        ui.persona = id || null;
+        ui.card = null;
+        ui.animate = true;
+        ui.render();
+        ui.root.querySelector('.cb_list').scrollTop = 0;
+    }, { cls: 'cb_scrollmenu' });
+}
+
+/** A menu beside its button on wide screens, a bottom sheet on phones; onPick gets the item's data-act. */
+function popMenu(html, anchor, onPick, { cls = '' } = {}) {
+    const layer = ui.root.querySelector('.cb_layer');
+    layer.querySelector('.cb_menu')?._close?.();
     const menu = document.createElement('div');
-    menu.className = 'cb_menu';
+    menu.className = `cb_menu${cls ? ` ${cls}` : ''}`;
     menu.setAttribute('role', 'menu');
-    menu.innerHTML = `<div class="cb_menuhead"><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${info?.size > 1 ? ` · ภาค ${info.part} จาก ${info.size} แชท` : ''}</span></div>`
-        + items.map(([id, icon, label, , danger]) => `<button role="menuitem" data-act="${esc(id)}"${danger ? ' class="cb_danger"' : ''}><i class="${icon}"></i>${esc(label)}</button>`).join('');
+    menu.innerHTML = html;
     layer.append(menu);
     const close = () => { menu.remove(); document.removeEventListener('pointerdown', outside, true); };
     const outside = e => { if (!menu.contains(e.target)) close(); };
     menu._close = close;
     setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
 
-    // Beside the button on wide screens, a bottom sheet on phones.
     const panel = ui.root.querySelector('.cb_panel').getBoundingClientRect();
     if (panel.width > 560 && anchor) {
         const r = anchor.getBoundingClientRect();
         menu.classList.add('cb_pop');
-        const h = menu.offsetHeight;
+        const h = menu.offsetHeight, w = menu.offsetWidth;
         const top = Math.min(panel.bottom - h - 8, Math.max(panel.top + 8, r.bottom + 4));
         menu.style.top = `${top - panel.top}px`;
-        menu.style.right = `${Math.max(8, panel.right - r.right)}px`;
+        // under the button, its right edge lined up with the button's, kept inside the window
+        menu.style.left = `${clamp(r.right - panel.left - w, 8, panel.width - w - 8)}px`;
     } else {
         menu.classList.add('cb_sheetmenu');
     }
-    menu.querySelector('button')?.focus();
+    const first = menu.querySelector('button.cb_on') || menu.querySelector('button');
+    first?.focus({ preventScroll: true });
+    first?.scrollIntoView?.({ block: 'nearest' });
 
-    menu.addEventListener('click', async e => {
+    menu.addEventListener('click', e => {
         const b = e.target.closest('[data-act]');
         if (!b) return;
         close();
-        try { await menuAction(b.dataset.act, c); } catch (err) { console.error(LOG, err); toast.err(errText(err)); }
+        onPick(b.dataset.act);
     });
+    return menu;
 }
 
 async function menuAction(act, c) {
