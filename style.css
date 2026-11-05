@@ -318,30 +318,9 @@
 }
 .cb_chip.cb_on > span { background: var(--cb-accent); color: var(--cb-on-accent); }
 .cb_chip[data-filter="unread"] > .fa-circle { font-size: 0.55em; color: var(--cb-accent); }
-#cb_root .cb_selchip select,
-#cb_root .cb_selchip select:hover,
-#cb_root .cb_selchip select:focus {
-    -webkit-appearance: none !important;
-    appearance: none !important;
-    background: transparent !important;
-    background-image: none !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    color: inherit !important;
-    font: inherit !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    height: auto !important;
-    min-height: 0 !important;
-    width: auto !important;
-    min-width: 0 !important;
-    max-width: 160px;
-    outline: none !important;
-    box-shadow: none !important;
-    cursor: pointer;
-}
-.cb_selchip::after { content: '\f078'; font: var(--fa-font-solid); font-size: 0.7em; opacity: 0.7; }
-.cb_selchip option { color: initial; }
+.cb_personachip > img { width: 18px; height: 18px; margin-left: -5px; border-radius: 50%; object-fit: cover; flex: none; }
+.cb_personachip > b { font-weight: inherit; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.cb_chip > .cb_chipchev { font-size: 0.62em; opacity: 0.7; }
 
 /* ---------------------------------------------------------------- list */
 
@@ -849,6 +828,17 @@
 .cb_menu button:focus-visible { background: var(--cb-hover) !important; outline: none; }
 .cb_menu .cb_danger,
 .cb_menu .cb_danger > i { color: var(--cb-danger) !important; }
+/* a long list of choices (persona) scrolls inside the menu */
+.cb_menu.cb_scrollmenu { max-height: min(460px, calc(100% - 16px)); overflow-y: auto; overscroll-behavior: contain; }
+.cb_menu.cb_scrollmenu.cb_sheetmenu { max-height: 72%; }
+.cb_menu .cb_menuhead { position: sticky; top: -6px; z-index: 1; background: var(--cb-solid); }
+.cb_menu.cb_sheetmenu .cb_menuhead { top: -8px; }
+.cb_menu button > .cb_mava { width: 26px; height: 26px; margin: 0 -4px; border-radius: 50%; object-fit: cover; flex: none; background: var(--cb-faint); }
+.cb_menu button > .cb_mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb_menu button > small { flex: none; font-size: 0.82em; color: var(--cb-muted); }
+.cb_menu button > .cb_mtick { width: auto; color: var(--cb-accent); visibility: hidden; }
+.cb_menu button.cb_on { color: var(--cb-accent); background: var(--cb-accent-soft) !important; }
+.cb_menu button.cb_on > .cb_mtick { visibility: visible; }
 
 @keyframes cb_pop { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
 @keyframes cb_up { from { transform: translateY(100%); } }
