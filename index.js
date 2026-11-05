@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.1'; // keep in sync with manifest.json
+const VERSION = '1.4.2'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -865,9 +865,13 @@ const ui = {
 
     // ------------------------------------------------ gallery
 
-    /** A cover: the small thumbnail at once (blurred), the full picture over it once loaded. */
+    /**
+     * A cover: the small thumbnail first (blurred), the picture over it once loaded.
+     * In the grid both wait until the tile comes near the screen (watchCovers).
+     */
     coverHtml(m, lazy = true) {
-        const img = (full, small) => `<img class="cb_thumb" src="${esc(small)}" alt="" decoding="async"><img class="cb_full" ${lazy ? 'data-src' : 'src'}="${esc(full)}" alt="" decoding="async">`;
+        const src = lazy ? 'data-src' : 'src';
+        const img = (full, small) => `<img class="cb_thumb" ${src}="${esc(small)}" alt="" decoding="async"><img class="cb_full" ${src}="${esc(full)}" alt="" decoding="async">`;
         if (m.collage) {
             return `<div class="cb_tcollage" data-n="${m.collage.length}">${m.collage.map(x => `<div>${img(x.full, x.thumb)}</div>`).join('') || '<i class="fa-solid fa-users"></i>'}</div>`;
         }
@@ -878,7 +882,8 @@ const ui = {
         const m = cardMeta(card.id);
         const cur = currentKey();
         const isOpen = card.chats.some(c => c.key === cur);
-        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0" style="--i:${Math.min(i, 40)}" aria-label="${esc(card.name)} · ${card.count} แชท">
+        // only the first screenful fades in one by one; the rest are off screen anyway
+        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0"${i < 40 ? ` data-a style="--i:${i}"` : ''} aria-label="${esc(card.name)} · ${card.count} แชท">
             <div class="cb_cover">${this.coverHtml(m)}</div>
             <div class="cb_tiletop">
                 ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
@@ -947,18 +952,22 @@ const ui = {
         });
     },
 
-    /** Full pictures load near the screen and are let go far from it, so a long gallery stays light. */
+    /**
+     * Pictures load only near the screen, a few at a time, scaled to the tile (coverQueue),
+     * and are let go further away, so a long gallery stays light.
+     */
     watchCovers() {
         const list = this.root.querySelector('.cb_list');
         this.imgObserver ??= new IntersectionObserver(es => {
             for (const x of es) {
+                if (x.isIntersecting) {
+                    for (const t of x.target.querySelectorAll('img.cb_thumb[data-src]:not([src])')) t.src = t.dataset.src;
+                }
                 for (const img of x.target.querySelectorAll('img.cb_full')) {
-                    const has = img.hasAttribute('src');
-                    if (x.isIntersecting && !has) img.src = img.dataset.src;
-                    else if (!x.isIntersecting && has) { img.removeAttribute('src'); img.classList.remove('cb_loaded'); }
+                    if (x.isIntersecting) showCover(img); else dropCover(img);
                 }
             }
-        }, { root: list, rootMargin: '1000px 0px' });
+        }, { root: list, rootMargin: '400px 0px' });
         list.querySelectorAll('.cb_tile').forEach(t => this.imgObserver.observe(t));
     },
 
@@ -1035,6 +1044,95 @@ function chatFromRow(row) {
 // ---------------------------------------------------------------- gallery cards
 
 const fullAvatar = file => `/characters/${encodeURIComponent(file)}`;
+
+// ---------------------------------------------------------------- gallery covers
+//
+// A card picture is a PNG of a few MB, around 4 MB once decoded. Showing dozens of them at
+// full size at once runs an app's WebView out of memory (Tauri and phone apps restart),
+// even where a desktop browser copes. So the gallery decodes a few at a time, keeps a
+// copy scaled to the tile, and lets the big picture go.
+
+const COVER_JOBS = 3;    // pictures decoding at the same time
+const COVER_KEEP = 240;  // scaled copies kept for scrolling back
+const coverCache = new Map(); // "url|w|h" → object URL of the scaled copy (or the url itself)
+const coverQueue = [];
+const coverWanted = new WeakSet(); // <img>s near the screen
+let coverRunning = 0;
+
+/** The tile's size in device pixels, rounded so one copy serves tiles of nearly the same size. */
+function coverBox(img) {
+    const box = img.parentElement;
+    const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
+    const step = v => Math.max(80, Math.ceil(v * dpr / 40) * 40);
+    return { w: step(box?.clientWidth || 160), h: step(box?.clientHeight || 240) };
+}
+
+function showCover(img) {
+    const url = img.dataset.src;
+    if (!url || img.hasAttribute('src')) return;
+    coverWanted.add(img);
+    const { w, h } = coverBox(img);
+    const hit = coverCache.get(`${url}|${w}|${h}`);
+    if (hit) { img.src = hit; return; }
+    if (!coverQueue.some(j => j.img === img)) coverQueue.push({ img, url, w, h });
+    pumpCovers();
+}
+
+function dropCover(img) {
+    coverWanted.delete(img);
+    const i = coverQueue.findIndex(j => j.img === img);
+    if (i >= 0) coverQueue.splice(i, 1);
+    if (img.hasAttribute('src')) { img.removeAttribute('src'); img.classList.remove('cb_loaded'); }
+    img.previousElementSibling?.classList.remove('cb_under');
+}
+
+function pumpCovers() {
+    while (coverRunning < COVER_JOBS && coverQueue.length) {
+        const job = coverQueue.shift();
+        if (!job.img.isConnected || !coverWanted.has(job.img)) continue;
+        coverRunning++;
+        scaledCover(job.url, job.w, job.h)
+            .then(src => { if (job.img.isConnected && coverWanted.has(job.img) && !job.img.hasAttribute('src')) job.img.src = src; })
+            .catch(() => {})
+            .finally(() => { coverRunning--; pumpCovers(); });
+    }
+}
+
+async function scaledCover(url, w, h) {
+    const key = `${url}|${w}|${h}`;
+    if (coverCache.has(key)) return coverCache.get(key);
+    let out = url;
+    const big = new Image();
+    try {
+        big.decoding = 'async';
+        big.src = url;
+        await big.decode();
+        const nw = big.naturalWidth, nh = big.naturalHeight;
+        const k = Math.max(w / nw, h / nh); // fill the tile, as object-fit: cover does
+        if (nw && nh && k < 0.8) {
+            const c = document.createElement('canvas');
+            c.width = Math.round(nw * k);
+            c.height = Math.round(nh * k);
+            const g = c.getContext('2d');
+            g.imageSmoothingQuality = 'high';
+            g.drawImage(big, 0, 0, c.width, c.height);
+            const blob = await new Promise(r => c.toBlob(r, 'image/webp', 0.9));
+            c.width = c.height = 0;
+            if (blob) out = URL.createObjectURL(blob);
+        }
+    } catch { /* could not decode, or another site's picture: show it as it is */ }
+    big.removeAttribute('src'); // let the big decoded picture go
+    coverCache.set(key, out);
+    if (coverCache.size > COVER_KEEP) {
+        for (const [k, v] of coverCache) {
+            if (coverCache.size <= COVER_KEEP) break;
+            if (v.startsWith('blob:') && document.querySelector(`img[src="${CSS.escape(v)}"]`)) continue; // on screen
+            coverCache.delete(k);
+            if (v.startsWith('blob:')) URL.revokeObjectURL(v);
+        }
+    }
+    return out;
+}
 
 function tagsOf(entity, ch) {
     const c = ctx();
@@ -1484,8 +1582,13 @@ function wireBrowser(root) {
     search.addEventListener('focus', () => root.classList.remove('cb_headfold'));
     small.addEventListener?.('change', () => { if (!small.matches) root.classList.remove('cb_headfold'); });
 
-    // Full covers fade in over their thumbnail once loaded.
-    list.addEventListener('load', e => { if (e.target.matches?.('img.cb_full')) e.target.classList.add('cb_loaded'); }, true);
+    // Full covers fade in over their thumbnail once loaded; the blurred thumbnail under it then stops being drawn.
+    list.addEventListener('load', e => {
+        if (!e.target.matches?.('img.cb_full')) return;
+        e.target.classList.add('cb_loaded');
+        const under = e.target.previousElementSibling;
+        if (under?.matches('img.cb_thumb')) under.classList.add('cb_under');
+    }, true);
     list.addEventListener('error', e => { if (e.target.matches?.('img.cb_full') && e.target.hasAttribute('src')) e.target.classList.add('cb_failed'); }, true);
 
     // On a card page, swiping sideways goes to the next / previous card.
