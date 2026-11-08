@@ -2719,10 +2719,21 @@ function renderTopEditor(box) {
 }
 
 /** A slider with a number box you can read and type into. Icon size is stored as % of the button but shown and typed in px. */
+/**
+ * The number field's look is written inline with !important: themes style every input with !important behind
+ * selectors like input:not(#send_textarea), whose :not(#id) outweighs a class rule. appearance is none, not
+ * textfield: Safari reads appearance and -webkit-appearance as one property, and textfield makes iOS paint its
+ * own white field.
+ */
+const BARE_NUM = ['-webkit-appearance:none', 'appearance:none', 'display:block', 'flex:none', 'box-sizing:content-box',
+    'width:calc(3ch + 2px)', 'min-width:0', 'max-width:none', 'height:26px', 'min-height:0', 'line-height:26px',
+    'margin:0', 'padding:0', 'border:0', 'border-radius:0', 'outline:none', 'box-shadow:none', 'background:transparent',
+    'filter:none', 'text-shadow:none', 'color:inherit', 'font:inherit', 'font-size:16px', 'font-weight:700', 'text-align:right']
+    .map(d => `${d}!important`).join(';');
 const lookSlider = (k, min, max, step, v, unit, label, num = k) => `
     <div class="cb_look_slider">
         <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${esc(label)}">
-        <label class="cb_valbox" title="${esc(label)}"><input type="number" data-num="${num}" inputmode="numeric" aria-label="${esc(label)}"><i>${unit}</i></label>
+        <label class="cb_valbox" title="${esc(label)}"><input type="number" data-num="${num}" inputmode="numeric" aria-label="${esc(label)}" style="${BARE_NUM}"><i>${unit}</i></label>
     </div>`;
 /** The icon size the button is drawn at, in px (same sum as applyLook). */
 const lookIconPx = L => Math.round(clamp(Number(L.size) || 46, 24, 160) * clamp(Number(L.iconSize) || 42, 20, 100) / 100);
