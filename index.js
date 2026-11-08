@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.3'; // keep in sync with manifest.json
+const VERSION = '1.4.4'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -2718,6 +2718,26 @@ function renderTopEditor(box) {
     sync();
 }
 
+/** A slider with a number box you can read and type into. Icon size is stored as % of the button but shown and typed in px. */
+/**
+ * The number field's look is written inline with !important: themes style every input with !important behind
+ * selectors like input:not(#send_textarea), whose :not(#id) outweighs a class rule. appearance is none, not
+ * textfield: Safari reads appearance and -webkit-appearance as one property, and textfield makes iOS paint its
+ * own white field.
+ */
+const BARE_NUM = ['-webkit-appearance:none', 'appearance:none', 'display:block', 'flex:none', 'box-sizing:content-box',
+    'width:calc(3ch + 2px)', 'min-width:0', 'max-width:none', 'height:26px', 'min-height:0', 'line-height:26px',
+    'margin:0', 'padding:0', 'border:0', 'border-radius:0', 'outline:none', 'box-shadow:none', 'background:transparent',
+    'filter:none', 'text-shadow:none', 'color:inherit', 'font:inherit', 'font-size:16px', 'font-weight:700', 'text-align:right']
+    .map(d => `${d}!important`).join(';');
+const lookSlider = (k, min, max, step, v, unit, label, num = k) => `
+    <div class="cb_look_slider">
+        <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${esc(label)}">
+        <label class="cb_valbox" title="${esc(label)}"><input type="number" data-num="${num}" inputmode="numeric" aria-label="${esc(label)}" style="${BARE_NUM}"><i>${unit}</i></label>
+    </div>`;
+/** The icon size the button is drawn at, in px (same sum as applyLook). */
+const lookIconPx = L => Math.round(clamp(Number(L.size) || 46, 24, 160) * clamp(Number(L.iconSize) || 42, 20, 100) / 100);
+
 /** The look editor in the Extensions panel: every change shows on the real button and the preview at once. */
 function renderLookEditor(box) {
     if (!box) return;
@@ -2746,9 +2766,9 @@ function renderLookEditor(box) {
                 <input type="file" accept="image/*" hidden>
             </div>
             <span>ข้อความ</span><input type="text" class="text_pole" data-k="label" maxlength="16" value="${esc(L.label)}" title="แสดงเมื่อเลือกรูปทรงแคปซูล">
-            <span>ขนาด</span><input type="range" data-k="size" min="28" max="140" step="1" value="${L.size}">
-            <span>ไอคอน</span><input type="range" data-k="iconSize" min="20" max="100" step="1" value="${L.iconSize}">
-            <span>ความทึบ</span><input type="range" data-k="opacity" min="20" max="100" step="5" value="${L.opacity}" title="ตอนไม่ได้แตะ — แตะหรือชี้แล้วชัดเต็ม">
+            <span>ขนาด</span>${lookSlider('size', 28, 140, 1, L.size, 'px', 'ขนาดปุ่ม')}
+            <span>ไอคอน</span>${lookSlider('iconSize', 20, 100, 1, L.iconSize, 'px', 'ขนาดไอคอน (px)', 'iconPx')}
+            <span>ความทึบ</span>${lookSlider('opacity', 20, 100, 5, L.opacity, '%', 'ความทึบตอนไม่ได้แตะ — แตะหรือชี้แล้วชัดเต็ม')}
             <span>พื้น</span>
             <div class="cb_look_inline"><select class="text_pole" data-k="bg" style="width:auto">${opt([['theme', 'สีธีม'], ['custom', 'เลือกสี'], ['none', 'โปร่งใส']], L.bg)}</select><input type="color" data-k="bgColor" value="${esc(L.bgColor)}"></div>
             <span>สีไอคอน</span>
@@ -2765,6 +2785,15 @@ function renderLookEditor(box) {
     const preview = box.querySelector('#cb_look_preview');
     const refresh = () => {
         const cur = look();
+        // numbers next to the sliders (a box being typed in is left alone)
+        const active = document.activeElement;
+        const nums = { size: cur.size, iconPx: lookIconPx(cur), opacity: cur.opacity };
+        for (const el of box.querySelectorAll('[data-num]')) {
+            if (el.dataset.num === 'iconPx') { el.min = String(Math.round(cur.size * 0.2)); el.max = String(cur.size); }
+            else { const r = box.querySelector(`[data-k="${el.dataset.num}"]`); el.min = r.min; el.max = r.max; }
+            if (el !== active) el.value = String(nums[el.dataset.num]);
+        }
+        for (const r of box.querySelectorAll('input[type="range"][data-k]')) if (r !== active) r.value = String(cur[r.dataset.k]);
         applyLook(preview, cur);
         const pb = preview.querySelector('.cb_launch_badge');
         pb.textContent = '3';
@@ -2815,6 +2844,27 @@ function renderLookEditor(box) {
             sync();
         } catch (err) { toast.err(`ใช้รูปนี้ไม่ได้: ${errText(err)}`); }
     });
+    const onNum = e => {
+        const el = e.target.closest('[data-num]');
+        if (!el || !box.contains(el)) return;
+        const n = Number(el.value);
+        if (el.value === '' || !Number.isFinite(n)) { if (e.type === 'change') refresh(); return; }
+        const k = el.dataset.num;
+        if (k === 'iconPx') {
+            const size = Number(look().size) || 46;
+            const pct = clamp(Math.round(n * 100 / size), 20, 100);
+            if (e.type === 'input' && Math.abs(Math.round(size * pct / 100) - n) > 1) return; // still typing
+            set({ iconSize: pct });
+        } else {
+            const min = Number(el.min), max = Number(el.max);
+            if (e.type === 'input' && (n < min || n > max)) return; // still typing, e.g. "1" on the way to "120"
+            set({ [k]: clamp(Math.round(n), min, max) });
+        }
+        if (e.type === 'change') { el.blur(); refresh(); }
+    };
+    box.addEventListener('input', onNum);
+    box.addEventListener('change', onNum);
+    box.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('[data-num]')) e.target.blur(); });
     const onField = e => {
         const el = e.target.closest('[data-k]');
         if (!el) return;
