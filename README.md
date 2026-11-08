@@ -29,6 +29,7 @@ https://github.com/inathael-58/SillyTavern-Chat-Browser
 | ไอคอน 💬 บนแถบด้านบน | แต่งได้ ดูด้านล่าง |
 | เมนูไม้กายสิทธิ์ (Extensions) → Chat Browser | |
 | คำสั่ง `/chats` | ใช้ทำปุ่มใน Quick Reply หรือ Quick Dock ได้ |
+| ตรวจปัญหา | Extensions → Chat Browser → **ตรวจปัญหา** (หรือ `/chats-debug`) ทดลองเปิดแล้วได้รายงานไว้คัดลอกส่งให้คนแก้ ใช้เมื่อเปิดไม่ขึ้นบนมือถือ |
 
 ปิดปุ่มลอยหรือไอคอนบนแถบด้านบนได้ในแผง Extensions → Chat Browser
 

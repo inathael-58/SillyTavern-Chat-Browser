@@ -1188,6 +1188,9 @@
 
 /* settings panel */
 .cb_settings .cb_setbtns { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.cb_settings .cb_diagbox { margin: 6px 0; }
+.cb_settings .cb_diagbox textarea { width: 100%; font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre; }
+.cb_settings .cb_diagbox .menu_button { width: fit-content; display: inline-flex; gap: 6px; align-items: center; }
 .cb_settings .cb_setnote { display: block; opacity: 0.75; margin-top: 6px; line-height: 1.5; }
 .cb_settings .cb_version { opacity: 0.6; font-weight: normal; }
 

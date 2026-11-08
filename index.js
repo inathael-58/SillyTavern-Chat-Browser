@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.4'; // keep in sync with manifest.json
+const VERSION = '1.4.5'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -1302,8 +1302,92 @@ function applyScheme(root = ui.root) {
     b.setAttribute('aria-label', b.title);
 }
 
+// ---------------------------------------------------------------- diagnostics (phones have no console)
+
+const diagLog = [];
+function diag(msg) {
+    diagLog.push(`${new Date().toISOString().slice(11, 23)} ${msg}`);
+    if (diagLog.length > 30) diagLog.shift();
+}
+
+/** Show an error on screen as well as in the console. */
+function reportError(where, err) {
+    console.error(LOG, where, err);
+    diag(`ERROR ${where}: ${err?.stack || err}`);
+    try { globalThis.toastr?.error(`${where}: ${err?.message ?? err}`, 'Chat Browser', { timeOut: 15000, extendedTimeOut: 15000 }); } catch { /* ignore */ }
+}
+
+window.addEventListener('error', e => {
+    if (String(e.filename || '').startsWith(BASE_URL.href)) diag(`window error ${e.message} @${String(e.filename).slice(BASE_URL.href.length)}:${e.lineno}`);
+});
+window.addEventListener('unhandledrejection', e => {
+    if (String(e.reason?.stack || '').includes(BASE_URL.href)) diag(`unhandled ${e.reason?.message ?? e.reason}`);
+});
+
+function elName(el) {
+    if (!el) return 'null';
+    const cls = typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.') : '';
+    return `${el.tagName?.toLowerCase()}${el.id ? '#' + el.id : ''}${cls}`;
+}
+
+/** Ancestors whose style makes position:fixed follow them instead of the screen, or that hide everything. */
+function fixedBreakers(el) {
+    const out = [];
+    for (let n = el?.parentElement; n; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        const bad = ['transform', 'perspective', 'filter', 'backdropFilter', 'contain', 'willChange']
+            .filter(k => cs[k] && !['none', 'normal', 'auto', ''].includes(cs[k]))
+            .map(k => `${k}:${cs[k]}`);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') bad.push(`display:${cs.display} visibility:${cs.visibility} opacity:${cs.opacity}`);
+        if (bad.length) out.push(`${elName(n)} {${bad.join('; ')}}`);
+    }
+    return out;
+}
+
+/** Open the browser, measure what is really on screen, close it again, and return a report. */
+async function runDiagnostics() {
+    const lines = [];
+    const add = (k, v) => lines.push(`${k}: ${v}`);
+    let remote = '?';
+    try { remote = String((await (await fetch(new URL('manifest.json', BASE_URL), { cache: 'no-store' })).json())?.version ?? '?'); } catch { /* offline */ }
+    add('version', `v${VERSION} (server ${remote})`);
+    add('ua', navigator.userAgent);
+    const vv = window.visualViewport;
+    add('viewport', `${innerWidth}x${innerHeight} · vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)} @${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)} scale ${vv.scale}` : '-'} · dpr ${devicePixelRatio}`);
+    add('scroll', `window ${scrollX},${scrollY} · html ${document.documentElement.scrollTop} · body ${document.body.scrollTop}`);
+    const s = settings();
+    add('settings', `view=${s.view} launcher=${s.launcher} topbar=${s.topbar} scheme=${s.scheme ?? '-'}`);
+
+    const before = diagLog.length;
+    const wasOpen = !!ui.root;
+    if (!wasOpen) openBrowser();
+    await new Promise(r => setTimeout(r, 700));
+    const o = ui.root;
+    add('overlay', o ? `inDOM=${document.body.contains(o)} parent=${elName(o.parentElement)} class="${o.className}"` : 'ไม่มี');
+    if (o) {
+        const cs = getComputedStyle(o), r = o.getBoundingClientRect();
+        add('overlay style', `display:${cs.display} visibility:${cs.visibility} opacity:${cs.opacity} position:${cs.position} z:${cs.zIndex} transform:${cs.transform}`);
+        add('overlay rect', `${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`);
+        const p = o.querySelector('.cb_panel');
+        if (p) { const rp = p.getBoundingClientRect(), cp = getComputedStyle(p); add('panel', `${Math.round(rp.left)},${Math.round(rp.top)} ${Math.round(rp.width)}x${Math.round(rp.height)} opacity:${cp.opacity} transform:${cp.transform}`); }
+        add('list', `${o.querySelector('.cb_list')?.children.length ?? '-'} children`);
+        add('ที่จุดบนจอ', [0.15, 0.5, 0.85].map(fy => {
+            const el = document.elementFromPoint(innerWidth / 2, innerHeight * fy);
+            return `${Math.round(fy * 100)}%=${o.contains(el) ? 'แผง' : elName(el)}`;
+        }).join(' · '));
+        const br = fixedBreakers(o);
+        add('ตัวบัง fixed', br.length ? br.join(' | ') : 'ไม่มี');
+    }
+    add('log', '');
+    lines.push(...diagLog.slice(Math.max(0, before - 8)).map(x => '  ' + x));
+    if (!wasOpen) closeBrowser();
+    return lines.join('\n');
+}
+
 function openBrowser() {
+    diag('open');
     if (ui.root) { ui.root.querySelector('.cb_search')?.focus(); return; }
+    ui.openedAt = Date.now();
     ui.query = '';
     ui.animate = true;
     loadCache();
@@ -1353,12 +1437,17 @@ function openBrowser() {
         </section>`;
     document.body.append(root);
     ui.root = root;
-    fitViewport();
-    root.dataset.view = s.view;
-    applyScheme(root);
-    wireBrowser(root);
-    ui.render();
+    // Visible first, then filled: if drawing fails the panel still shows (with its close button) and says why.
     requestAnimationFrame(() => root.classList.add('cb_in'));
+    try {
+        fitViewport();
+        root.dataset.view = s.view;
+        applyScheme(root);
+        wireBrowser(root);
+        ui.render();
+    } catch (err) {
+        reportError('วาด Chat Browser ไม่ได้', err);
+    }
     if (!matchMedia('(pointer: coarse)').matches) root.querySelector('.cb_search').focus();
     reload();
 }
@@ -1366,6 +1455,7 @@ function openBrowser() {
 function closeBrowser() {
     const root = ui.root;
     if (!root) return;
+    diag(`close ${Date.now() - (ui.openedAt || 0)}ms หลังเปิด · ${(new Error().stack || '').split('\n').slice(1, 4).map(x => x.trim()).join(' < ')}`);
     ui.root = null;
     ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
@@ -1437,7 +1527,8 @@ function wireBrowser(root) {
     const search = root.querySelector('.cb_search');
     const clearq = root.querySelector('.cb_clearq');
 
-    root.querySelector('.cb_backdrop').addEventListener('click', closeBrowser);
+    // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
+    root.querySelector('.cb_backdrop').addEventListener('click', () => { if (Date.now() - (ui.openedAt || 0) > 450) closeBrowser(); });
     root.querySelector('.cb_closebtn').addEventListener('click', closeBrowser);
 
     let qTimer = null;
@@ -2463,12 +2554,21 @@ function renderLauncher() {
     document.body.append(el);
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrowser(); } });
 
-    let start = null, moved = false;
+    let start = null, moved = false, skipClick = false;
+    // Open on click, not pointerup: opened on pointerup, the browser appears under the finger and the
+    // click that follows the same tap lands on whatever is there (a chat tile, or the backdrop, which closes it).
+    el.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (skipClick) { skipClick = false; return; } // the click that ends a drag
+        openBrowser();
+    });
     el.addEventListener('pointerdown', e => {
         if (e.button !== 0) return;
         const r = el.getBoundingClientRect();
         start = { x: e.clientX, y: e.clientY, left: r.left, top: r.top, id: e.pointerId };
         moved = false;
+        skipClick = false;
         try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     });
     el.addEventListener('pointermove', e => {
@@ -2484,7 +2584,8 @@ function renderLauncher() {
     const end = e => {
         if (!start || e.pointerId !== start.id) return;
         start = null;
-        if (!moved) { if (e.type === 'pointerup') openBrowser(); return; }
+        if (!moved) return; // a plain tap: the click handler opens the browser
+        skipClick = true;
         el.classList.remove('cb_dragging');
         const { x: ox, y: oy, w: vw, h: vh } = visibleArea();
         const b = el.getBoundingClientRect();
@@ -2603,12 +2704,28 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
+                    <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Chat Browser แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
+                </div>
+                <div id="cb_diagbox" class="cb_diagbox" hidden>
+                    <textarea class="text_pole" readonly rows="10"></textarea>
+                    <div id="cb_diagcopy" class="menu_button"><i class="fa-solid fa-copy"></i> คัดลอกรายงาน</div>
                 </div>
                 <small class="cb_setnote">เปิดได้จากปุ่มลอย ไอคอนบนแถบด้านบน เมนูไม้กายสิทธิ์ (Extensions) หรือคำสั่ง <code>/chats</code> · จำนวนข้อความใหม่นับแยกในแต่ละเครื่อง · ปุ่ม Sync และ Clean Sync ใช้ Chat Auto Backup ที่เชื่อมต่อ Dropbox ไว้</small>
             </div>
         </div>
     </div>`);
     const $ = id => document.getElementById(id);
+    $('cb_set_diag').addEventListener('click', async () => {
+        let text;
+        try { text = await runDiagnostics(); } catch (err) { text = `ตรวจไม่สำเร็จ: ${err?.stack || err}\n${diagLog.join('\n')}`; }
+        $('cb_diagbox').hidden = false;
+        $('cb_diagbox').querySelector('textarea').value = text;
+    });
+    $('cb_diagcopy').addEventListener('click', async () => {
+        const ta = $('cb_diagbox').querySelector('textarea');
+        try { await navigator.clipboard.writeText(ta.value); globalThis.toastr?.success('คัดลอกรายงานแล้ว', '', { timeOut: 1500 }); }
+        catch { ta.focus(); ta.select(); globalThis.toastr?.info('เลือกข้อความไว้แล้ว กดคัดลอกเองได้เลย'); }
+    });
     $('cb_set_launcher').checked = !!s.launcher;
     $('cb_set_topbar').checked = !!s.topbar;
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
@@ -2893,6 +3010,11 @@ function registerCommand() {
                 name: 'chats',
                 callback: () => { openBrowser(); return ''; },
                 helpString: 'เปิด Chat Browser — แชททั้งหมดของทุกตัวละครและกลุ่ม',
+            }));
+            c.SlashCommandParser.addCommandObject(c.SlashCommand.fromProps({
+                name: 'chats-debug',
+                callback: async () => runDiagnostics(),
+                helpString: 'ตรวจปัญหา Chat Browser แล้วคืนรายงาน (ดูหรือคัดลอกได้จาก Extensions → Chat Browser → ตรวจปัญหา)',
             }));
         } else {
             c.registerSlashCommand?.('chats', () => { openBrowser(); return ''; }, [], 'เปิด Chat Browser', true, true);
