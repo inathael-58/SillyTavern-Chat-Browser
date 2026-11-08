@@ -1230,6 +1230,25 @@
 .cb_look_grid .cb_shapeswatch { width: 20px; height: 20px; background: currentColor; display: block; }
 .cb_look_rows { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center; margin-top: 10px; font-size: 0.9em; }
 .cb_look_rows input[type="range"] { width: 100%; }
+.cb_look_slider { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.cb_look_slider input[type="range"] { flex: 1; min-width: 0; }
+/* the number box: written with !important, or some themes draw their own field around it */
+.cb_valbox {
+    flex: none; display: inline-flex; align-items: center; gap: 2px; margin: 0;
+    height: 30px; padding: 0 8px 0 5px; border-radius: 8px;
+    border: 1px solid var(--cb-line); background: var(--cb-faint);
+    font-variant-numeric: tabular-nums; cursor: text;
+}
+.cb_valbox:focus-within { border-color: var(--cb-accent); }
+.cb_valbox input {
+    -webkit-appearance: none !important; appearance: textfield !important; -moz-appearance: textfield !important;
+    width: 3.2ch !important; min-width: 0 !important; height: 26px !important; min-height: 0 !important;
+    margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important; outline: none !important;
+    box-shadow: none !important; background: transparent !important; color: var(--cb-fg) !important;
+    font: inherit !important; font-size: 16px !important; font-weight: 700 !important; text-align: right !important;
+}
+.cb_valbox input::-webkit-inner-spin-button, .cb_valbox input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.cb_valbox i { font-style: normal; font-size: 0.8em; opacity: 0.7; }
 .cb_look_rows select,
 .cb_look_rows input[type="text"] { margin: 0; }
 .cb_look_inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
