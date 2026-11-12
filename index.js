@@ -10,7 +10,7 @@
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.5'; // keep in sync with manifest.json
+const VERSION = '1.4.6'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';

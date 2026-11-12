@@ -1692,3 +1692,20 @@
 @media (prefers-reduced-motion: reduce) {
     .cb_tile, .cb_card, .cb_heroimg, .cb_full, .cb_lightbox, .cb_lbimgs img { animation: none !important; transition: none !important; }
 }
+
+/* ---------------------------------------------------------------- solid surfaces
+   Blur Tint often carries alpha: glass themes pair it with a backdrop blur. A surface
+   with no blur of its own (a sticky header, or any panel once Fast UI's body.no-blur
+   strips every backdrop-filter) would let the chat or the list underneath show through,
+   so those paint the tint with its alpha dropped. `/ 1` matters: relative colour keeps
+   the source alpha when it is left out. */
+@supports (color: rgb(from red r g b / 1)) {
+    /* --cb-solid / --cb-on-accent were meant to be opaque, but color-mix(… 100%, #000) keeps the alpha */
+    .cb_root, .cb_launch, .cb_settings {
+        --cb-solid: rgb(from var(--cb-panel) r g b / 1);
+        --cb-on-accent: rgb(from var(--cb-tint) r g b / 1);
+    }
+    .cb_launch_badge { box-shadow: 0 0 0 2px rgb(from var(--SmartThemeBlurTintColor, #222) r g b / 1); }
+    #cb_topbar .cb_launch_badge { --cb-on-accent: rgb(from var(--SmartThemeBlurTintColor, #222) r g b / 1); }
+}
+body.no-blur .cb_root :is(.cb_panel, .cb_section) { background: var(--cb-solid); }
