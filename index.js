@@ -8,10 +8,11 @@
  */
 
 import { installThemePalette } from './theme-palette.js';
+import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.7'; // keep in sync with manifest.json
+const VERSION = '1.5.0'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -2393,7 +2394,9 @@ function showCleanHistory(api) {
 //
 // The floating button is a decoration as much as a button: a shape (or a mask such as a
 // heart or a star, or no shape at all for a sticker), an icon, an emoji or a picture,
-// colours from the theme or picked, a size, and an idle animation.
+// colours that adapt to the theme (always readable) or are picked, a size, and an idle animation.
+
+let palette = null; // theme-palette.js handle
 
 const LOOK_DEFAULT = Object.freeze({
     shape: 'circle',    // circle squircle bubble pill heart flower star cloud sticker
@@ -2403,9 +2406,9 @@ const LOOK_DEFAULT = Object.freeze({
     fit: 'cover',       // cover | contain
     size: 46,
     iconSize: 42,       // % of the button
-    bg: 'theme',        // theme | custom | none
+    bg: 'auto',         // auto (adapts to the theme palette) | custom | none
     bgColor: '#2a2633',
-    fg: 'theme',        // theme | custom
+    fg: 'auto',         // auto | custom
     fgColor: '#ffd38a',
     border: true,
     shadow: true,
@@ -2442,8 +2445,11 @@ const LOOK_PRESETS = [
 
 function look() {
     const s = settings();
-    s.launcherLook = { ...LOOK_DEFAULT, ...(s.launcherLook && typeof s.launcherLook === 'object' ? s.launcherLook : {}) };
-    return s.launcherLook;
+    const L = s.launcherLook = { ...LOOK_DEFAULT, ...(s.launcherLook && typeof s.launcherLook === 'object' ? s.launcherLook : {}) };
+    // 1.5: "theme colours" became the adaptive mode
+    if (!['auto', 'custom', 'none'].includes(L.bg)) L.bg = 'auto';
+    if (!['auto', 'custom'].includes(L.fg)) L.fg = 'auto';
+    return L;
 }
 
 /** Draw the button (the real one or the preview) from a look. */
@@ -2459,10 +2465,16 @@ function applyLook(el, L = look()) {
     el.style.setProperty('--cb-lsize', `${size}px`);
     el.style.setProperty('--cb-licon', `${Math.round(size * clamp(Number(L.iconSize) || 42, 20, 100) / 100)}px`);
     el.style.setProperty('--cb-lop', String(clamp(Number(L.opacity) || 100, 20, 100) / 100));
-    if (L.bg === 'custom') el.style.setProperty('--cb-lbg', L.bgColor);
-    else if (L.bg === 'none') el.style.setProperty('--cb-lbg', 'transparent');
-    else el.style.removeProperty('--cb-lbg');
-    if (L.fg === 'custom') el.style.setProperty('--cb-lfg', L.fgColor); else el.style.removeProperty('--cb-lfg');
+    el.dataset.bg = L.bg;
+    // adaptive colours: from the theme palette, readable on the button's real background (float-colors.js)
+    const c = floatColors(palette?.current, { bg: L.bg === 'custom' ? L.bgColor : null, fg: L.fg === 'custom' ? L.fgColor : null });
+    const prop = (k, v) => (v ? el.style.setProperty(k, v) : el.style.removeProperty(k));
+    prop('--cb-lbg', L.bg === 'custom' ? L.bgColor : L.bg === 'none' ? 'transparent' : c && `color-mix(in srgb, ${c.bg} 80%, transparent)`);
+    prop('--cb-lfg', L.fg === 'custom' ? L.fgColor : c?.accentText);
+    prop('--cb-lline', c?.border);
+    prop('--cb-lring', c?.ring);
+    prop('--cb-lbadge', c?.accent);
+    prop('--cb-lbadge-fg', c?.onAccent);
     if (mask) { el.style.setProperty('--cb-lmask', mask.mask); el.style.setProperty('--cb-lnudge', mask.nudge); }
     let inner = el.querySelector('.cb_lshape');
     if (!inner) {
@@ -2888,9 +2900,9 @@ function renderLookEditor(box) {
             <span>ไอคอน</span>${lookSlider('iconSize', 20, 100, 1, L.iconSize, 'px', 'ขนาดไอคอน (px)', 'iconPx')}
             <span>ความทึบ</span>${lookSlider('opacity', 20, 100, 5, L.opacity, '%', 'ความทึบตอนไม่ได้แตะ — แตะหรือชี้แล้วชัดเต็ม')}
             <span>พื้น</span>
-            <div class="cb_look_inline"><select class="text_pole" data-k="bg" style="width:auto">${opt([['theme', 'สีธีม'], ['custom', 'เลือกสี'], ['none', 'โปร่งใส']], L.bg)}</select><input type="color" data-k="bgColor" value="${esc(L.bgColor)}"></div>
+            <div class="cb_look_inline"><select class="text_pole" data-k="bg" style="width:auto">${opt([['auto', COLOR_MODE_LABELS.auto], ['custom', COLOR_MODE_LABELS.custom], ['none', 'โปร่งใส']], L.bg)}</select><input type="color" data-k="bgColor" value="${esc(L.bgColor)}"></div>
             <span>สีไอคอน</span>
-            <div class="cb_look_inline"><select class="text_pole" data-k="fg" style="width:auto">${opt([['theme', 'สีธีม (Quote)'], ['custom', 'เลือกสี']], L.fg)}</select><input type="color" data-k="fgColor" value="${esc(L.fgColor)}"></div>
+            <div class="cb_look_inline"><select class="text_pole" data-k="fg" style="width:auto">${opt(Object.entries(COLOR_MODE_LABELS), L.fg)}</select><input type="color" data-k="fgColor" value="${esc(L.fgColor)}"></div>
             <span>เคลื่อนไหว</span><select class="text_pole" data-k="anim">${opt(ANIMS, L.anim)}</select>
         </div>
         <div class="cb_look_checks">
@@ -3076,7 +3088,7 @@ async function checkForNewVersion() {
         globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Chat Browser', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'lib.js', 'theme-palette.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
@@ -3085,7 +3097,11 @@ async function checkForNewVersion() {
 
 async function init() {
     // สีที่อ่านออกเสมอ (ดู theme-palette.js): โหมด "ตามธีม" ใช้ทั้งชุด · โหมดสว่าง/มืดที่เลือกเองใช้แค่สีเน้นที่ตัดกับพื้นของโหมดนั้น
-    try { installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } }); } catch (err) { console.warn('[Chat Browser] theme palette', err); }
+    // ปุ่มลอยแบบ "ปรับตามธีม" ก็ดึงสีจากชุดนี้ (float-colors.js) แล้วคำนวณใหม่เมื่อเปลี่ยนธีม
+    try {
+        palette = installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } });
+        palette.onChange(() => document.querySelectorAll('.cb_launch').forEach(el => applyLook(el)));
+    } catch (err) { console.warn('[Chat Browser] theme palette', err); }
     settings();
     renderSettingsPanel();
     renderLauncher();

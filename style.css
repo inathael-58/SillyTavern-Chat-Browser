@@ -1101,7 +1101,9 @@
     font-size: var(--cb-licon);
     line-height: 1;
 }
-.cb_launch[data-border="1"] .cb_lshape { box-shadow: inset 0 0 0 1.5px var(--cb-line); }
+.cb_launch[data-border="1"] .cb_lshape { box-shadow: inset 0 0 0 1.5px var(--cb-lline, var(--cb-line)); }
+/* no background: a thin halo in the theme's UI colour keeps the icon readable over any chat */
+.cb_launch[data-bg="none"]:not([data-shape="sticker"]) :is(.cb_licon, .cb_llabel) { filter: drop-shadow(0 0 1px var(--cb-lring, #000)) drop-shadow(0 0 1px var(--cb-lring, #000)); }
 .cb_licon { pointer-events: none; }
 .cb_lemoji { font-size: calc(var(--cb-licon) * 1.1); line-height: 1; pointer-events: none; }
 .cb_limg { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; -webkit-user-drag: none; }
@@ -1156,27 +1158,32 @@
 }
 
 .cb_launch_badge {
+    /* the same badge as every floating button in this collection (float-colors.js): upper right,
+     * 18px, adaptive accent with a ring in the button's background — so badges line up in Quick Dock */
     position: absolute;
-    z-index: 1;
-    top: -3px;
-    right: -3px;
+    z-index: 2;
+    top: -4px;
+    right: -4px;
     min-width: 18px;
     height: 18px;
     padding: 0 5px;
+    box-sizing: border-box;
     border-radius: 999px;
-    font: 800 10.5px/18px var(--mainFontFamily, sans-serif);
+    font: 700 10.5px/18px var(--mainFontFamily, sans-serif);
+    font-variant-numeric: tabular-nums;
     text-align: center;
-    color: var(--cb-on-accent, #111);
-    background: var(--cb-accent, var(--SmartThemeQuoteColor, #e18a24));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--SmartThemeBlurTintColor, #222) 100%, #000);
+    color: var(--cb-lbadge-fg, var(--cb-on-accent, #111));
+    background: var(--cb-lbadge, var(--cb-accent, var(--SmartThemeQuoteColor, #e18a24)));
+    box-shadow: 0 0 0 2px var(--cb-lring, color-mix(in srgb, var(--SmartThemeBlurTintColor, #222) 100%, #000));
     pointer-events: none;
 }
 .cb_launch_badge[hidden] { display: none; }
 #cb_topbar { position: relative; }
 #cb_topbar .drawer-toggle-cb { position: relative; cursor: pointer; }
 #cb_topbar .cb_launch_badge {
-    --cb-accent: var(--SmartThemeQuoteColor, #e18a24);
-    --cb-on-accent: color-mix(in srgb, var(--SmartThemeBlurTintColor, #222) 100%, #000);
+    --cb-lbadge: var(--cbp-p-accent, var(--SmartThemeQuoteColor, #e18a24));
+    --cb-lbadge-fg: var(--cbp-p-on-accent, color-mix(in srgb, var(--SmartThemeBlurTintColor, #222) 100%, #000));
+    --cb-lring: var(--cbp-p-surface, var(--SmartThemeBlurTintColor, #222));
     top: -2px;
     right: -6px;
     min-width: 15px;
