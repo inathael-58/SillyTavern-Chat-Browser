@@ -1709,3 +1709,22 @@
     #cb_topbar .cb_launch_badge { --cb-on-accent: rgb(from var(--SmartThemeBlurTintColor, #222) r g b / 1); }
 }
 body.no-blur .cb_root :is(.cb_panel, .cb_section) { background: var(--cb-solid); }
+
+/* แม่แบบสีที่อ่านออกเสมอ (theme-palette.js) — โหมด "ตามธีม" และหน้าตั้งค่า: พื้นทึบ สีเน้น/ตัวอักษรตัดกับพื้นจริง
+   ทำงานเมื่อคำนวณสีสำเร็จแล้วเท่านั้น (<html class="cbp-pal">) ถ้าไม่สำเร็จจะใช้สีธีมตรง ๆ แบบเดิม
+   โหมดสว่าง/มืดที่เลือกเอง (data-scheme) คงชุดสีของตัวเอง เปลี่ยนแค่สีเน้นให้ตัดกับพื้นของโหมดนั้น
+   ปุ่มลอย (.cb_launch) ไม่อยู่ในนี้ */
+html.cbp-pal :is(.cb_root:not([data-scheme]), .cb_settings) {
+    --SmartThemeBlurTintColor: var(--cbp-p-surface);
+    --SmartThemeBodyColor: var(--cbp-p-fg);
+    --SmartThemeQuoteColor: var(--cbp-p-accent-text);
+    --SmartThemeEmColor: var(--cbp-p-em);
+    --SmartThemeUnderlineColor: var(--cbp-p-underline);
+    --SmartThemeBorderColor: var(--cbp-p-line);
+    --cb-on-accent: var(--cbp-p-on-accent);
+    /* พื้นทึบอยู่แล้ว ไม่ต้องผสมดำเพิ่ม — สีเน้นถูกปรับให้ตัดกับพื้นนี้พอดี */
+    --cb-panel: var(--cbp-p-surface);
+    --cb-solid: var(--cbp-p-surface);
+}
+html.cbp-pal .cb_root[data-scheme="light"] { --cb-accent: var(--cbp-p-accent-light); }
+html.cbp-pal .cb_root[data-scheme="dark"] { --cb-accent: var(--cbp-p-accent-dark); }
