@@ -7,10 +7,11 @@
  * story, and run Sync / Clean Sync through Chat Auto Backup.
  */
 
+import { installThemePalette } from './theme-palette.js';
 import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
 
 const MODULE = 'chat_browser';
-const VERSION = '1.4.6'; // keep in sync with manifest.json
+const VERSION = '1.4.7'; // keep in sync with manifest.json
 const LOG = '[ChatBrowser]';
 const BASE_URL = new URL('.', import.meta.url);
 const CACHE_KEY = 'cb_cache_v1';
@@ -3075,7 +3076,7 @@ async function checkForNewVersion() {
         globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Chat Browser', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'lib.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'lib.js', 'theme-palette.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
@@ -3083,6 +3084,8 @@ async function checkForNewVersion() {
 }
 
 async function init() {
+    // สีที่อ่านออกเสมอ (ดู theme-palette.js): โหมด "ตามธีม" ใช้ทั้งชุด · โหมดสว่าง/มืดที่เลือกเองใช้แค่สีเน้นที่ตัดกับพื้นของโหมดนั้น
+    try { installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } }); } catch (err) { console.warn('[Chat Browser] theme palette', err); }
     settings();
     renderSettingsPanel();
     renderLauncher();
