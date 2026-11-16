@@ -1,10 +1,16 @@
 /*
- * Chat Browser — SillyTavern UI extension
+ * Reverie (formerly Chat Browser) — SillyTavern UI extension
  *
  * Every chat of every character and group in one list: open any of them in one tap,
  * see which chats continue one story, which persona a chat is tied to and how many
  * messages arrived since this device last looked. Pin, rename, delete, link parts of a
  * story, and run Sync / Clean Sync through Chat Auto Backup.
+ *
+ * The gallery (gallery.js) is a library of every character and group card, and each
+ * character can be edited on a phone with the card editor (editor.js).
+ *
+ * Settings stay under the key "chat_browser" and the CSS prefix "cb_", so pins, unread
+ * counts and the launcher's look carry over from Chat Browser.
  */
 
 import { installThemePalette } from './theme-palette.js';
@@ -15,7 +21,8 @@ import {
     charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
     sheet, sheetConfirm, sheetPrompt, sheetPick,
 } from './core.js';
-import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover } from './gallery.js';
+import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover, galleryEntities, pickTags, startNewChat, bulkAvailable, handOffToBulk } from './gallery.js';
+import { openEditor, editorOpen, closeEditor, closeEditorGuarded } from './editor.js';
 
 // ---------------------------------------------------------------- display regex
 //
@@ -514,7 +521,10 @@ const VIEWS = [
     ['detail', 'fa-solid fa-align-left', 'ละเอียด — อ่านข้อความล่าสุดได้ยาว'],
     ['gallery', 'fa-solid fa-table-cells-large', 'แกลเลอรี — ปกการ์ด แตะเพื่อดูรายละเอียดและแชทของการ์ดนั้น'],
 ];
-const SORTS = [['recent', 'ล่าสุด'], ['character', 'ตัวละคร'], ['name', 'ชื่อ'], ['size', 'ยาวสุด']];
+// 'character' is the list's own (sections per character); 'added' is the gallery's (cards by date added)
+const SORTS = [['recent', 'ล่าสุด'], ['character', 'ตัวละคร'], ['added', 'เพิ่มล่าสุด'], ['name', 'ชื่อ'], ['size', 'ยาวสุด']];
+/** The sort that applies in the current view: each view lacks one of the sorts. */
+const sortFor = (s, gallery) => (gallery ? (s.sort === 'character' ? 'name' : s.sort) : (s.sort === 'added' ? 'recent' : s.sort));
 
 Object.assign(ui, {
     root: null,
@@ -524,6 +534,7 @@ Object.assign(ui, {
     persona: null,
     selecting: false,
     selected: new Set(),
+    selCards: new Set(), // gallery: cards picked for Bulk Manager ("type|entity")
     collapsed: new Set(), // character sections folded
     expanded: new Set(),  // stories showing their older parts
     history: new Map(),   // key → loaded recent messages (detail view)
@@ -553,17 +564,20 @@ Object.assign(ui, {
         const opts = { query: this.query, filter: this.filter, entity: this.entity, persona: this.persona, pins: s.pins, unreadOf };
         let card = null;
         if (gallery) {
-            this.cards = buildCards(data.chats, { ...opts, sort: s.sort, extraText: cardSearchText });
+            // every character and group, also those without a chat yet
+            const entities = galleryEntities();
+            this.cards = buildCards(data.chats, { ...opts, sort: sortFor(s, true), extraText: cardSearchText, entities, tags: s.galleryTags, fav: s.galleryFav });
             // A card page lists every chat of that card, whatever the grid is filtered by.
-            if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf })[0] ?? null;
+            if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf, entities })[0] ?? null;
             if (!card) this.card = null;
+            const chatSort = sortFor(s, false);
             this.entries = card
-                ? buildEntries(data.chats, { sort: s.sort === 'character' ? 'recent' : s.sort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
+                ? buildEntries(data.chats, { sort: chatSort === 'character' ? 'recent' : chatSort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
                 : [];
             this.shownN = card ? card.count : this.cards.reduce((n, x) => n + x.count, 0);
         } else {
             this.card = null;
-            this.entries = buildEntries(data.chats, { ...opts, sort: s.sort, merge: s.merge });
+            this.entries = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge });
             this.shownN = this.entries.filter(e => e.kind === 'chat').length;
         }
         this.root.classList.toggle('cb_oncard', !!card);
@@ -604,6 +618,8 @@ Object.assign(ui, {
         if (this.query) return `<div class="cb_empty"><i class="fa-solid fa-magnifying-glass"></i><span>ไม่พบแชทที่ตรงกับ “${esc(this.query)}”</span></div>`;
         if (this.filter === 'unread') return '<div class="cb_empty"><i class="fa-solid fa-check-double"></i><span>อ่านครบทุกแชทแล้ว</span></div>';
         if (this.filter === 'pinned') return '<div class="cb_empty"><i class="fa-solid fa-thumbtack"></i><span>ยังไม่ได้ปักหมุดแชทไหน<br><small>กด ⋯ ที่แชทแล้วเลือก “ปักหมุด”</small></span></div>';
+        const s = settings();
+        if (s.view === 'gallery' && (s.galleryTags.length || s.galleryFav)) return '<div class="cb_empty"><i class="fa-solid fa-filter-circle-xmark"></i><span>ไม่มีการ์ดที่ตรงกับตัวกรอง<br><button class="cb_btn rv_clearfilters" data-clearfilters="1">ล้างตัวกรอง</button></span></div>';
         return '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ไม่มีแชท</span></div>';
     },
 
@@ -761,10 +777,20 @@ Object.assign(ui, {
     renderControls() {
         const r = this.root;
         const s = settings();
-        r.querySelectorAll('.cb_sort [data-sort]').forEach(b => b.classList.toggle('cb_on', b.dataset.sort === s.sort));
+        const gallery = s.view === 'gallery';
+        const sort = sortFor(s, gallery);
+        r.querySelectorAll('.cb_sort [data-sort]').forEach(b => {
+            b.classList.toggle('cb_on', b.dataset.sort === sort);
+            b.hidden = b.dataset.sort === (gallery ? 'character' : 'added');
+        });
+        // the gallery's select button picks cards for Bulk Manager: only there when it is installed
+        const sel = r.querySelector('.cb_selectbtn');
+        const cardsMode = gallery && !this.card;
+        sel.hidden = cardsMode && !bulkAvailable() && !this.selecting;
+        sel.title = cardsMode ? 'เลือกหลายการ์ด (ส่งต่อให้ Bulk Manager)' : 'เลือกหลายแชท';
         r.querySelectorAll('.cb_view [data-view]').forEach(b => b.classList.toggle('cb_on', b.dataset.view === s.view));
         const unread = totalUnread();
-        const groupsN = data.chats.filter(c => c.type === 'group').length;
+        const groupsN = gallery ? (ctx().groups || []).length : data.chats.filter(c => c.type === 'group').length;
         const pinsN = data.chats.filter(c => s.pins[c.key]).length;
         const cur = currentKey();
         const curChat = cur && data.byKey.get(cur);
@@ -775,14 +801,23 @@ Object.assign(ui, {
             chip('all', 'ทั้งหมด', 0),
             chip('unread', 'มีข้อความใหม่', unread, 'fa-solid fa-circle'),
             chip('pinned', 'ปักหมุด', pinsN, 'fa-solid fa-thumbtack'),
-            groupsN ? chip('group', 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
+            gallery ? `<button class="cb_chip cb_toggle${s.galleryFav ? ' cb_on' : ''}" data-fav="1" title="เฉพาะตัวละครและกลุ่มที่ติดดาวไว้"><i class="fa-solid fa-star"></i>โปรด</button>` : '',
+            gallery ? `<button class="cb_chip rv_tagchip${s.galleryTags.length ? ' cb_on' : ''}" data-tags="1" aria-haspopup="dialog" title="กรองตามแท็ก"><i class="fa-solid fa-tags"></i><b>${s.galleryTags.length ? esc(s.galleryTags.length > 2 ? `${s.galleryTags.slice(0, 2).join(', ')} +${s.galleryTags.length - 2}` : s.galleryTags.join(', ')) : 'แท็ก'}</b>${s.galleryTags.length ? '<i class="fa-solid fa-xmark" data-cleartags="1"></i>' : '<i class="fa-solid fa-chevron-down cb_chipchev"></i>'}</button>` : '',
+            groupsN ? chip('group', gallery ? 'กลุ่ม' : 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
             ent ? `<button class="cb_chip cb_on cb_entchip" data-entity="">${esc(ent.entityName)}<i class="fa-solid fa-xmark"></i></button>`
                 : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>${s.view === 'gallery' ? '' : 'เฉพาะ '}${esc(curChat.entityName)}</button>` : '',
             personas.length > 1 ? `<button class="cb_chip cb_personachip${this.persona ? ' cb_on' : ''}" data-personas="1" aria-haspopup="menu">${this.persona ? `<img src="${esc(thumb('persona', this.persona))}" alt="">` : '<i class="fa-solid fa-masks-theater"></i>'}<b>${esc(this.persona ? personas.find(([id]) => id === this.persona)?.[1] ?? this.persona : 'ทุก persona')}</b><i class="fa-solid fa-chevron-down cb_chipchev"></i></button>` : '',
             `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมภาคต่อ</button>`,
         ].join('');
         const shownChats = this.shownN;
-        r.querySelector('.cb_total').textContent = shownChats === data.chats.length || !data.chats.length ? `${data.chats.length}` : `${shownChats}/${data.chats.length}`;
+        r.querySelector('.cb_title b').textContent = gallery ? 'การ์ด' : 'แชท';
+        r.querySelector('.cb_title > i').className = gallery ? 'fa-solid fa-id-card' : 'fa-solid fa-comments';
+        if (gallery && !this.card) {
+            const all = galleryEntities().length;
+            r.querySelector('.cb_total').textContent = this.cards.length === all ? `${all}` : `${this.cards.length}/${all}`;
+        } else {
+            r.querySelector('.cb_total').textContent = shownChats === data.chats.length || !data.chats.length ? `${data.chats.length}` : `${shownChats}/${data.chats.length}`;
+        }
         this.renderSync();
     },
 
@@ -806,14 +841,25 @@ Object.assign(ui, {
         r.querySelector('.cb_clean').title = !synced ? 'ใช้ได้เมื่อเปิดซิงค์แชทระหว่างเครื่องใน Chat Auto Backup แล้ว (กดซิงค์อย่างน้อยหนึ่งครั้ง)' : 'ทำให้ Dropbox และทุกเครื่องมีแชทเหมือนเครื่องนี้เป๊ะ';
     },
 
+    /** What select mode picks here: cards on the gallery grid (for Bulk Manager), chats everywhere else. */
+    selectsCards() {
+        return settings().view === 'gallery' && !this.card;
+    },
+
     renderSelbar() {
         const bar = this.root?.querySelector('.cb_selbar');
         if (!bar) return;
         bar.hidden = !this.selecting;
         if (!this.selecting) return;
-        const n = this.selected.size;
-        bar.querySelector('.cb_selcount').textContent = n ? `เลือก ${n} แชท` : 'แตะแชทเพื่อเลือก';
-        bar.querySelectorAll('[data-bulk]').forEach(b => b.classList.toggle('cb_disabled', !n));
+        const cards = this.selectsCards();
+        bar.classList.toggle('rv_cardsel', cards);
+        const n = cards ? this.selCards.size : this.selected.size;
+        bar.querySelector('.cb_selcount').textContent = cards ? (n ? `${n} การ์ด` : 'แตะเลือกการ์ด') : (n ? `เลือก ${n} แชท` : 'แตะแชทเพื่อเลือก');
+        bar.querySelectorAll('[data-bulk]').forEach(b => {
+            const forCards = b.hasAttribute('data-cards');
+            b.hidden = b.dataset.bulk !== 'done' && forCards !== cards;
+            b.classList.toggle('cb_disabled', b.dataset.bulk !== 'done' && !n);
+        });
     },
 });
 Object.assign(ui, galleryUi);
@@ -862,7 +908,7 @@ function diag(msg) {
 function reportError(where, err) {
     console.error(LOG, where, err);
     diag(`ERROR ${where}: ${err?.stack || err}`);
-    try { globalThis.toastr?.error(`${where}: ${err?.message ?? err}`, 'Chat Browser', { timeOut: 15000, extendedTimeOut: 15000 }); } catch { /* ignore */ }
+    try { globalThis.toastr?.error(`${where}: ${err?.message ?? err}`, 'Reverie', { timeOut: 15000, extendedTimeOut: 15000 }); } catch { /* ignore */ }
 }
 
 window.addEventListener('error', e => {
@@ -946,7 +992,7 @@ function openBrowser() {
     root.className = 'cb_root';
     root.innerHTML = `
         <div class="cb_backdrop"></div>
-        <section class="cb_panel" role="dialog" aria-modal="true" aria-label="Chat Browser">
+        <section class="cb_panel" role="dialog" aria-modal="true" aria-label="Reverie">
             <header class="cb_head">
                 <div class="cb_titlebar">
                     <div class="cb_title"><i class="fa-solid fa-comments"></i><b>แชท</b><span class="cb_total"></span><i class="fa-solid fa-circle-notch fa-spin cb_spin" hidden></i></div>
@@ -979,6 +1025,9 @@ function openBrowser() {
                 <button data-bulk="unpin">เลิกปัก</button>
                 <button data-bulk="read"><i class="fa-solid fa-check-double"></i>อ่านแล้ว</button>
                 <button data-bulk="delete" class="cb_danger"><i class="fa-solid fa-trash"></i>ลบ</button>
+                <button data-bulk="cdelete" data-cards class="cb_danger" title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-trash"></i>ลบ</button>
+                <button data-bulk="cbackup" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-box-archive"></i>สำรอง</button>
+                <button data-bulk="ccopy" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-clone"></i>คัดลอก</button>
                 <button data-bulk="done">เสร็จ</button>
             </footer>
             <div class="cb_layer"></div>
@@ -994,7 +1043,7 @@ function openBrowser() {
         wireBrowser(root);
         ui.render();
     } catch (err) {
-        reportError('วาด Chat Browser ไม่ได้', err);
+        reportError('วาด Reverie ไม่ได้', err);
     }
     if (!matchMedia('(pointer: coarse)').matches) root.querySelector('.cb_search').focus();
     reload();
@@ -1004,6 +1053,7 @@ function closeBrowser() {
     const root = ui.root;
     if (!root) return;
     diag(`close ${Date.now() - (ui.openedAt || 0)}ms หลังเปิด · ${(new Error().stack || '').split('\n').slice(1, 4).map(x => x.trim()).join(' < ')}`);
+    closeEditor();      // its unsaved edits stay as a draft
     ui.root = null;
     ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
@@ -1076,8 +1126,10 @@ function wireBrowser(root) {
     const clearq = root.querySelector('.cb_clearq');
 
     // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
-    root.querySelector('.cb_backdrop').addEventListener('click', () => { if (Date.now() - (ui.openedAt || 0) > 450) closeBrowser(); });
-    root.querySelector('.cb_closebtn').addEventListener('click', closeBrowser);
+    // with the card editor open, unsaved edits are asked about first
+    const tryClose = async () => { if (editorOpen() && !(await closeEditorGuarded())) return; closeBrowser(); };
+    root.querySelector('.cb_backdrop').addEventListener('click', () => { if (Date.now() - (ui.openedAt || 0) > 450) tryClose(); });
+    root.querySelector('.cb_closebtn').addEventListener('click', tryClose);
 
     let qTimer = null;
     search.addEventListener('input', () => {
@@ -1107,6 +1159,7 @@ function wireBrowser(root) {
         const b = e.target.closest('[data-view]');
         if (!b || b.dataset.view === s.view) return;
         const toGallery = b.dataset.view === 'gallery' || s.view === 'gallery';
+        if (ui.selecting) { ui.selecting = false; ui.selected.clear(); ui.selCards.clear(); root.querySelector('.cb_selectbtn').classList.remove('cb_on'); }
         s.view = b.dataset.view; saveSettings(); ui.card = null; ui.animate = true; ui.render();
         if (toGallery) list.scrollTop = 0;
     });
@@ -1114,6 +1167,12 @@ function wireBrowser(root) {
         const b = e.target.closest('button');
         if (!b) return;
         if (b.dataset.personas) { openPersonaMenu(b); return; }
+        if (b.dataset.tags) {
+            if (e.target.closest('[data-cleartags]')) { s.galleryTags = []; saveSettings(); ui.card = null; ui.render(); list.scrollTop = 0; return; }
+            pickTags();
+            return;
+        }
+        if (b.dataset.fav) { s.galleryFav = !s.galleryFav; saveSettings(); ui.card = null; ui.animate = true; ui.render(); list.scrollTop = 0; return; }
         // in the gallery, the current character's chip goes straight to its card
         if (s.view === 'gallery' && b.dataset.entity) { openCard(b.dataset.entity); return; }
         if (b.dataset.filter) ui.filter = ui.filter === b.dataset.filter && b.dataset.filter !== 'all' ? 'all' : b.dataset.filter;
@@ -1142,10 +1201,24 @@ function wireBrowser(root) {
         if (b && !b.classList.contains('cb_disabled')) bulk(b.dataset.bulk);
     });
 
+    // A long press ends with a click on the same spot: that one click must not undo what the press did.
+    let skipClick = false;
+    list.addEventListener('click', e => {
+        if (!skipClick) return;
+        skipClick = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
+
     list.addEventListener('click', async e => {
         const t = e.target;
+        if (t.closest('[data-clearfilters]')) { s.galleryTags = []; s.galleryFav = false; saveSettings(); ui.render(); return; }
         const tile = t.closest('.cb_tile');
-        if (tile) { openCard(tile.dataset.card); return; }
+        if (tile) {
+            if (ui.selecting && ui.selectsCards()) toggleSelectCard(tile.dataset.card);
+            else openCard(tile.dataset.card);
+            return;
+        }
         const gsize = t.closest('[data-gsize]');
         if (gsize) { setGallerySize(gsize.dataset.gsize); return; }
         const card = t.closest('[data-cardpage]');
@@ -1154,6 +1227,8 @@ function wireBrowser(root) {
             if (t.closest('[data-zoom]')) zoomCover(id);
             else if (t.closest('[data-tag]')) searchFor(t.closest('[data-tag]').dataset.tag);
             else if (t.closest('[data-continue]')) doOpen(data.byKey.get(t.closest('[data-continue]').dataset.continue));
+            else if (t.closest('[data-newchat]')) startNewChat(id);
+            else if (t.closest('[data-edit]')) openEditor(id.slice(id.indexOf('|') + 1));
             else if (t.closest('[data-note]')) {
                 ui.noteOpen = !ui.noteOpen;
                 const box = card.querySelector('.cb_cnote');
@@ -1187,14 +1262,22 @@ function wireBrowser(root) {
         doOpen(c);
     });
 
-    // Long press on a row starts selecting (touch).
-    let pressTimer = null, pressKey = null;
+    // Long press on a row (or, with Bulk Manager installed, a gallery card) starts selecting (touch).
+    let pressTimer = null;
     list.addEventListener('pointerdown', e => {
+        skipClick = false;
         if (e.pointerType !== 'touch' || ui.selecting) return;
         const row = e.target.closest('.cb_row');
-        if (!row || e.target.closest('button')) return;
-        pressKey = row.dataset.key;
-        pressTimer = setTimeout(() => { pressTimer = null; setSelecting(true); toggleSelect(pressKey); navigator.vibrate?.(15); }, 550);
+        const tile = !row && ui.selectsCards() && bulkAvailable() ? e.target.closest('.cb_tile') : null;
+        if ((!row && !tile) || e.target.closest('button')) return;
+        const key = row ? row.dataset.key : tile.dataset.card;
+        pressTimer = setTimeout(() => {
+            pressTimer = null;
+            skipClick = true;
+            setSelecting(true);
+            if (row) toggleSelect(key); else toggleSelectCard(key);
+            navigator.vibrate?.(15);
+        }, 550);
     });
     const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
 
@@ -1287,7 +1370,11 @@ function wireBrowser(root) {
                 if (first) doOpen(chatFromRow(first));
                 return;
             }
-            if (e.target.matches?.('.cb_tile')) { e.preventDefault(); openCard(e.target.dataset.card); return; }
+            if (e.target.matches?.('.cb_tile')) {
+                e.preventDefault();
+                if (ui.selecting && ui.selectsCards()) toggleSelectCard(e.target.dataset.card); else openCard(e.target.dataset.card);
+                return;
+            }
             const row = e.target.closest?.('.cb_row');
             if (row && e.target === row) { e.preventDefault(); ui.selecting ? toggleSelect(row.dataset.key) : doOpen(chatFromRow(row)); }
             const sec = e.target.closest?.('.cb_section.cb_foldable');
@@ -1309,7 +1396,7 @@ async function doOpen(c) {
 
 function setSelecting(on) {
     ui.selecting = on;
-    if (!on) ui.selected.clear();
+    if (!on) { ui.selected.clear(); ui.selCards.clear(); }
     ui.root?.querySelector('.cb_selectbtn')?.classList.toggle('cb_on', on);
     ui.render();
 }
@@ -1320,7 +1407,21 @@ function toggleSelect(key) {
     ui.renderSelbar();
 }
 
+/** Gallery: pick a card for Bulk Manager (characters only — groups are not in Bulk Manager's characters tab). */
+function toggleSelectCard(id) {
+    if (!id.startsWith('character|')) { toast.info('ส่งต่อให้ Bulk Manager ได้เฉพาะตัวละคร (ยังไม่รองรับกลุ่ม)'); return; }
+    if (ui.selCards.has(id)) ui.selCards.delete(id); else ui.selCards.add(id);
+    ui.root?.querySelector(`.cb_tile[data-card="${CSS.escape(id)}"]`)?.classList.toggle('cb_selected', ui.selCards.has(id));
+    ui.renderSelbar();
+}
+
 async function bulk(action) {
+    if (action.startsWith('c')) {
+        const avatars = [...ui.selCards].filter(id => id.startsWith('character|')).map(id => id.slice('character|'.length));
+        if (!avatars.length) return;
+        await handOffToBulk(avatars, { cdelete: 'delete', cbackup: 'backup', ccopy: 'copy' }[action]);
+        return;
+    }
     const list = [...ui.selected].map(k => data.byKey.get(k)).filter(Boolean);
     if (action === 'done') { setSelecting(false); return; }
     if (!list.length) return;
@@ -2029,7 +2130,7 @@ function renderLauncher() {
     el.className = 'cb_launch';
     el.setAttribute('role', 'button');
     el.tabIndex = 0;
-    el.title = 'Chat Browser — แชททั้งหมด';
+    el.title = 'Reverie — แชทและการ์ดทั้งหมด';
     applyLook(el);
     document.body.append(el);
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrowser(); } });
@@ -2138,7 +2239,7 @@ function renderTopbar() {
     el = document.createElement('div');
     el.id = 'cb_topbar';
     el.className = 'drawer';
-    el.innerHTML = '<div class="drawer-toggle-cb"><div class="cb_ticon" title="Chat Browser — แชททั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
+    el.innerHTML = '<div class="drawer-toggle-cb"><div class="cb_ticon" title="Reverie — แชทและการ์ดทั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
     const before = document.getElementById('rightNavHolder');
     if (before?.parentElement === holder) holder.insertBefore(el, before); else holder.append(el);
     el.addEventListener('click', e => { e.stopPropagation(); openBrowser(); });
@@ -2153,7 +2254,7 @@ function addWandItem() {
     item.id = 'cb_wand';
     item.className = 'list-group-item flex-container flexGap5 interactable';
     item.tabIndex = 0;
-    item.innerHTML = '<div class="fa-solid fa-comments extensionsMenuExtensionButton"></div><span>Chat Browser</span>';
+    item.innerHTML = '<div class="fa-solid fa-comments extensionsMenuExtensionButton"></div><span>Reverie</span>';
     item.addEventListener('click', () => openBrowser());
     menu.append(item);
 }
@@ -2166,11 +2267,11 @@ function renderSettingsPanel() {
     <div id="cb_settings" class="cb_settings">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>Chat Browser <small class="cb_version">v${VERSION}</small></b>
+                <b>Reverie <small class="cb_version">v${VERSION}</small></b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Chat Browser</div></div>
+                <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Reverie</div></div>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_launcher"> ปุ่มลอยบนจอ (ลากไปวางตรงไหนก็ได้ หรือเก็บเข้า Quick Dock)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_topbar"> ไอคอนบนแถบด้านบน</label>
                 <details class="cb_look">
@@ -2184,13 +2285,13 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
-                    <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Chat Browser แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
+                    <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Reverie แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
                 </div>
                 <div id="cb_diagbox" class="cb_diagbox" hidden>
                     <textarea class="text_pole" readonly rows="10"></textarea>
                     <div id="cb_diagcopy" class="menu_button"><i class="fa-solid fa-copy"></i> คัดลอกรายงาน</div>
                 </div>
-                <small class="cb_setnote">เปิดได้จากปุ่มลอย ไอคอนบนแถบด้านบน เมนูไม้กายสิทธิ์ (Extensions) หรือคำสั่ง <code>/chats</code> · จำนวนข้อความใหม่นับแยกในแต่ละเครื่อง · ปุ่ม Sync และ Clean Sync ใช้ Chat Auto Backup ที่เชื่อมต่อ Dropbox ไว้</small>
+                <small class="cb_setnote">เปิดได้จากปุ่มลอย ไอคอนบนแถบด้านบน เมนูไม้กายสิทธิ์ (Extensions) หรือคำสั่ง <code>/chats</code> (<code>/reverie</code>) · จำนวนข้อความใหม่นับแยกในแต่ละเครื่อง · ปุ่ม Sync และ Clean Sync ใช้ Chat Auto Backup ที่เชื่อมต่อ Dropbox ไว้</small>
             </div>
         </div>
     </div>`);
@@ -2488,16 +2589,18 @@ function registerCommand() {
         if (c.SlashCommandParser?.addCommandObject && c.SlashCommand?.fromProps) {
             c.SlashCommandParser.addCommandObject(c.SlashCommand.fromProps({
                 name: 'chats',
+                aliases: ['reverie'],
                 callback: () => { openBrowser(); return ''; },
-                helpString: 'เปิด Chat Browser — แชททั้งหมดของทุกตัวละครและกลุ่ม',
+                helpString: 'เปิด Reverie — แชทและการ์ดทั้งหมดของทุกตัวละครและกลุ่ม (/reverie ก็ได้)',
             }));
             c.SlashCommandParser.addCommandObject(c.SlashCommand.fromProps({
                 name: 'chats-debug',
+                aliases: ['reverie-debug'],
                 callback: async () => runDiagnostics(),
-                helpString: 'ตรวจปัญหา Chat Browser แล้วคืนรายงาน (ดูหรือคัดลอกได้จาก Extensions → Chat Browser → ตรวจปัญหา)',
+                helpString: 'ตรวจปัญหา Reverie แล้วคืนรายงาน (ดูหรือคัดลอกได้จาก Extensions → Reverie → ตรวจปัญหา)',
             }));
         } else {
-            c.registerSlashCommand?.('chats', () => { openBrowser(); return ''; }, [], 'เปิด Chat Browser', true, true);
+            c.registerSlashCommand?.('chats', () => { openBrowser(); return ''; }, ['reverie'], 'เปิด Reverie', true, true);
         }
     } catch (e) { console.warn(LOG, 'slash command', e); }
 }
@@ -2552,10 +2655,10 @@ async function checkForNewVersion() {
         const res = await fetch(new URL('manifest.json', BASE_URL), { cache: 'no-store' });
         const remote = String((await res.json())?.version ?? '');
         if (!remote || remote === VERSION) return;
-        globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Chat Browser', {
+        globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Reverie', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
@@ -2568,7 +2671,7 @@ async function init() {
     try {
         palette = installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } });
         palette.onChange(() => document.querySelectorAll('.cb_launch').forEach(el => applyLook(el)));
-    } catch (err) { console.warn('[Chat Browser] theme palette', err); }
+    } catch (err) { console.warn(LOG, 'theme palette', err); }
     settings();
     renderSettingsPanel();
     renderLauncher();
@@ -2583,6 +2686,11 @@ async function init() {
     console.log(LOG, 'loaded', VERSION);
 }
 
-globalThis.ChatBrowser = { open: openBrowser, close: closeBrowser, reload, data, VERSION };
+// what gallery.js and editor.js call back into
+Object.assign(app, { closeBrowser, doOpen, reload });
+
+const publicApi = { open: openBrowser, close: closeBrowser, reload, data, VERSION, openEditor: avatar => { openBrowser(); return openEditor(avatar); } };
+globalThis.Reverie = publicApi;
+globalThis.ChatBrowser = publicApi; // the old name, for anything that already calls it
 
 if (typeof jQuery === 'function') jQuery(init); else init();

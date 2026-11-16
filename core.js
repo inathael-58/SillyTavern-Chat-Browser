@@ -3,8 +3,8 @@
  */
 
 export const MODULE = 'chat_browser';
-export const VERSION = '1.5.0'; // keep in sync with manifest.json
-export const LOG = '[ChatBrowser]';
+export const VERSION = '2.0.0'; // keep in sync with manifest.json
+export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
 export const SEEN_KEY = 'cb_seen_v1';
@@ -23,6 +23,8 @@ export const DEFAULTS = Object.freeze({
     topbarLook: null,    // filled from TOP_DEFAULT
     scheme: 'theme',     // theme | light | dark — colours of the browser window
     gallerySize: 'large', // large | compact — cover size in the gallery
+    galleryTags: Object.freeze([]), // gallery: only cards with every one of these tags
+    galleryFav: false,   // gallery: only favourites
 });
 
 export const ctx = () => SillyTavern.getContext();
@@ -32,18 +34,19 @@ export function settings() {
     if (!ext[MODULE]) ext[MODULE] = {};
     const s = ext[MODULE];
     for (const [k, v] of Object.entries(DEFAULTS)) {
-        if (s[k] === undefined) s[k] = (v && typeof v === 'object') ? { ...v } : v;
+        if (s[k] === undefined) s[k] = Array.isArray(v) ? [...v] : (v && typeof v === 'object') ? { ...v } : v;
     }
+    if (!Array.isArray(s.galleryTags)) s.galleryTags = [];
     return s;
 }
 export const saveSettings = () => ctx().saveSettingsDebounced();
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const toast = {
-    ok: (m, t) => globalThis.toastr?.success(m, t ?? 'Chat Browser'),
-    info: (m, t) => globalThis.toastr?.info(m, t ?? 'Chat Browser'),
-    warn: (m, t) => globalThis.toastr?.warning(m, t ?? 'Chat Browser'),
-    err: (m, t) => globalThis.toastr?.error(m, t ?? 'Chat Browser'),
+    ok: (m, t, o) => globalThis.toastr?.success(m, t ?? 'Reverie', o),
+    info: (m, t, o) => globalThis.toastr?.info(m, t ?? 'Reverie', o),
+    warn: (m, t, o) => globalThis.toastr?.warning(m, t ?? 'Reverie', o),
+    err: (m, t, o) => globalThis.toastr?.error(m, t ?? 'Reverie', o),
 };
 export const wait = ms => new Promise(r => setTimeout(r, ms));
 export const errText = e => String(e?.message ?? e);

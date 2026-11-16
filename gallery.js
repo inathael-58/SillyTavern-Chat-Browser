@@ -3,8 +3,8 @@
  * (picture, creator, tags, creator's note and the card's chats).
  */
 
-import { ctx, settings, saveSettings, esc, charOf, groupOf, thumb, currentKey, ui } from './core.js';
-import { fullTime, noteText, relTime } from './lib.js';
+import { ctx, settings, saveSettings, esc, toast, errText, st, charOf, charIndex, groupOf, thumb, currentKey, isGenerating, data, ui, app, sheet } from './core.js';
+import { addedAt, fullTime, noteText, relTime, tagCounts } from './lib.js';
 
 // ---------------------------------------------------------------- gallery cards
 
@@ -99,9 +99,17 @@ async function scaledCover(url, w, h) {
     return out;
 }
 
+let tagIndex = { list: null, map: new Map() };
+function tagById(id) {
+    const list = ctx().tags || [];
+    if (tagIndex.list !== list || tagIndex.size !== list.length) tagIndex = { list, size: list.length, map: new Map(list.map(t => [t.id, t])) };
+    return tagIndex.map.get(id);
+}
+
+/** SillyTavern's own tags of a character or group; else the tags written in the card. */
 export function tagsOf(entity, ch) {
     const c = ctx();
-    const own = (c.tagMap?.[entity] || []).map(id => (c.tags || []).find(t => t.id === id)).filter(t => t?.name);
+    const own = (c.tagMap?.[entity] || []).map(tagById).filter(t => t?.name);
     if (own.length) return own.map(t => ({ name: String(t.name), color: t.color || '', color2: t.color2 || '' }));
     // tags written in the card itself, when SillyTavern's own tags were not imported
     const raw = ch?.data?.tags ?? ch?.tags;
@@ -109,7 +117,7 @@ export function tagsOf(entity, ch) {
 }
 
 /** What the gallery shows of a character or group: pictures, tags, creator and creator's note. */
-export function cardMeta(id) {
+export function cardMeta(id, { note = true } = {}) {
     const bar = id.indexOf('|');
     const type = id.slice(0, bar), entity = id.slice(bar + 1);
     if (type === 'group') {
@@ -135,7 +143,7 @@ export function cardMeta(id) {
         tags: tagsOf(entity, ch),
         creator: String(d.creator ?? '').trim(),
         version: String(d.character_version ?? '').trim(),
-        note: noteText(d.creator_notes || ch?.creatorcomment || '', { char: ch?.name, user: ctx().name1 }),
+        note: note ? noteText(d.creator_notes || ch?.creatorcomment || '', { char: ch?.name, user: ctx().name1 }) : '',
         fav: ch?.fav === true || ch?.fav === 'true',
     };
 }
@@ -172,8 +180,140 @@ function creditHtml(value, { icon = '', prefix = '', title = '', maxText = 40 } 
 
 /** Tags and creator, so the gallery search finds cards by them too. */
 export function cardSearchText(id) {
-    const m = cardMeta(id);
+    const m = cardMeta(id, { note: false });
     return `${m.tags.map(t => t.name).join('\n')}\n${m.creator}`;
+}
+
+const isFav = x => x?.fav === true || x?.fav === 'true';
+
+/** Every character and group, so cards without any chat (a card just imported) are in the gallery too. */
+export function galleryEntities() {
+    const c = ctx();
+    const out = [];
+    for (const ch of c.characters || []) {
+        if (!ch?.avatar) continue;
+        out.push({ id: `character|${ch.avatar}`, type: 'character', entity: ch.avatar, name: String(ch.name ?? ''), fav: isFav(ch), added: addedAt(ch, c.timestampToMoment), tags: tagsOf(ch.avatar, ch).map(t => t.name) });
+    }
+    for (const g of c.groups || []) {
+        if (g?.id == null) continue;
+        const id = String(g.id);
+        out.push({ id: `group|${id}`, type: 'group', entity: id, name: String(g.name ?? ''), fav: isFav(g), added: addedAt(g, c.timestampToMoment), tags: tagsOf(id, null).map(t => t.name) });
+    }
+    return out;
+}
+
+/** Which tags to show cards for (every one of them): SillyTavern's tags with how many cards have each. */
+export async function pickTags() {
+    const s = settings();
+    const counts = tagCounts(galleryEntities());
+    if (!counts.length) { toast.info('ยังไม่มีการ์ดไหนติดแท็ก'); return; }
+    const chosen = new Set(s.galleryTags.filter(t => counts.some(x => x.name === t)));
+    const colorOf = new Map((ctx().tags || []).map(t => [String(t.name), t]));
+    const row = x => {
+        const t = colorOf.get(x.name);
+        const dot = t?.color ? `<span class="rv_tagdot" style="background:${esc(t.color)}"></span>` : '<i class="fa-solid fa-tag"></i>';
+        return `<button class="cb_pick rv_tagpick${chosen.has(x.name) ? ' cb_on' : ''}" data-tag="${esc(x.name)}" aria-pressed="${chosen.has(x.name)}">${dot}<span class="rv_tagname">${esc(x.name)}</span><small>${x.count}</small><i class="fa-solid fa-check cb_tick"></i></button>`;
+    };
+    const res = await sheet({
+        title: 'กรองตามแท็ก',
+        body: `<p class="cb_note">แสดงเฉพาะการ์ดที่มี<b>ทุก</b>แท็กที่เลือก · ตัวเลขคือจำนวนการ์ด</p>
+            ${counts.length > 8 ? '<input type="search" class="cb_input rv_tagq" placeholder="หาแท็ก" aria-label="หาแท็ก" autocomplete="off" spellcheck="false">' : ''}
+            <div class="cb_picklist rv_taglist">${counts.map(row).join('')}</div>`,
+        buttons: [
+            { label: 'ล้าง', run: a => a.close([]) },
+            { label: 'ใช้ตัวกรอง', primary: true, run: a => a.close([...chosen]) },
+        ],
+        onMount: a => {
+            a.body.querySelector('.rv_taglist').addEventListener('click', e => {
+                const b = e.target.closest('[data-tag]');
+                if (!b) return;
+                const t = b.dataset.tag;
+                if (chosen.has(t)) chosen.delete(t); else chosen.add(t);
+                b.classList.toggle('cb_on', chosen.has(t));
+                b.setAttribute('aria-pressed', String(chosen.has(t)));
+            });
+            const input = a.body.querySelector('.rv_tagq');
+            input?.addEventListener('input', () => {
+                const q = input.value.trim().toLowerCase();
+                for (const b of a.body.querySelectorAll('[data-tag]')) b.hidden = !!q && !b.dataset.tag.toLowerCase().includes(q);
+            });
+        },
+    });
+    if (res == null) return;
+    s.galleryTags = res;
+    saveSettings();
+    ui.card = null;
+    ui.animate = true;
+    ui.render();
+    ui.root?.querySelector('.cb_list')?.scrollTo?.(0, 0);
+}
+
+/** A new chat with this character or group, made by SillyTavern the way its own "Start new chat" does. */
+export async function startNewChat(id) {
+    const bar = id.indexOf('|');
+    const type = id.slice(0, bar), entity = id.slice(bar + 1);
+    if (isGenerating()) { toast.warn('กำลังสร้างข้อความอยู่ — รอให้เสร็จหรือกดหยุดก่อน'); return; }
+    app.closeBrowser();
+    try {
+        const c = ctx();
+        const s = await st();
+        const had = data.chats.some(x => x.type === type && x.entity === entity);
+        if (type === 'group') {
+            const g = groupOf(entity);
+            if (!g) throw new Error('ไม่พบกลุ่มนี้แล้ว');
+            if (String(c.groupId) !== String(g.id)) {
+                if (!s.openGroupById) throw new Error('SillyTavern รุ่นนี้เปิดกลุ่มจากที่นี่ไม่ได้');
+                await s.openGroupById(g.id);
+                if (String(ctx().groupId) !== String(g.id)) throw new Error('เปิดกลุ่มไม่ได้ตอนนี้ (กำลังบันทึกแชทอยู่?) ลองอีกครั้ง');
+                if (!had) return; // opening a group without chats already started its first one
+            }
+        } else {
+            const idx = charIndex(entity);
+            if (idx < 0) throw new Error('ไม่พบตัวละครนี้แล้ว');
+            if (String(c.characterId) !== String(idx) || c.groupId) {
+                await c.selectCharacterById(idx);
+                const now = ctx();
+                if (String(now.characterId) !== String(idx) || now.groupId) throw new Error('เปลี่ยนตัวละครไม่ได้ตอนนี้ (กำลังบันทึกแชทอยู่?) ลองอีกครั้ง');
+                if (!had) return; // SillyTavern started the first chat (with the greeting) as it opened the card
+            }
+        }
+        if (typeof s.doNewChat === 'function') await s.doNewChat({ deleteCurrentChat: false });
+        else await ctx().executeSlashCommandsWithOptions('/newchat');
+    } catch (e) {
+        console.error('[Reverie]', e);
+        toast.err(`เริ่มแชทใหม่ไม่สำเร็จ: ${errText(e)}`);
+    }
+}
+
+// ------------------------------------------------ hand-off to Bulk Manager
+
+const hasSlash = name => { try { return !!ctx().SlashCommandParser?.commands?.[name]; } catch { return false; } };
+
+/** Bulk Manager is installed: with its hand-off (selection carried over) or at least its /bulk command. */
+export function bulkAvailable() {
+    return typeof globalThis.BulkManager?.open === 'function' || hasSlash('bulk');
+}
+
+/** Open Bulk Manager on its characters tab with these cards selected. action is a hint (delete | backup | copy). */
+export async function handOffToBulk(avatars, action) {
+    const bm = globalThis.BulkManager;
+    app.closeBrowser();
+    try {
+        if (typeof bm?.open === 'function') {
+            await bm.open({ tab: 'characters', select: [...avatars], action });
+            return true;
+        }
+        if (hasSlash('bulk')) {
+            await ctx().executeSlashCommandsWithOptions('/bulk');
+            toast.info('เปิด Bulk Manager แล้ว แต่รุ่นที่ติดตั้งอยู่ยังรับการ์ดที่เลือกจาก Reverie ไม่ได้ — เลือกการ์ดอีกครั้งในแผงนั้น (อัปเดต Bulk Manager แล้วจะส่งต่อให้เอง)', 'Reverie', { timeOut: 9000 });
+            return true;
+        }
+        toast.warn('ไม่พบ Bulk Manager');
+    } catch (e) {
+        console.error('[Reverie]', e);
+        toast.err(`เปิด Bulk Manager ไม่สำเร็จ: ${errText(e)}`);
+    }
+    return false;
 }
 
 export function openCard(id) {
@@ -263,13 +403,16 @@ export const galleryUi = {
     },
 
     tileHtml(card, i) {
-        const m = cardMeta(card.id);
+        const m = cardMeta(card.id, { note: false });
         const cur = currentKey();
         const isOpen = card.chats.some(c => c.key === cur);
+        const sel = this.selecting && this.selCards.has(card.id);
+        const sub = card.count ? `${card.count} แชท · ${esc(relTime(card.last))}` : '<span class="rv_nochat">ยังไม่มีแชท</span>';
         // only the first screenful fades in one by one; the rest are off screen anyway
-        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0"${i < 40 ? ` data-a style="--i:${i}"` : ''} aria-label="${esc(card.name)} · ${card.count} แชท">
+        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}${sel ? ' cb_selected' : ''}${card.count ? '' : ' rv_fresh'}" data-card="${esc(card.id)}" role="button" tabindex="0"${i < 40 ? ` data-a style="--i:${i}"` : ''} aria-label="${esc(card.name)} · ${card.count ? `${card.count} แชท` : 'ยังไม่มีแชท'}">
             <div class="cb_cover">${this.coverHtml(m)}</div>
             <div class="cb_tiletop">
+                ${this.selecting ? `<span class="rv_tcheck${card.type === 'group' ? ' rv_nosel' : ''}"><i class="fa-solid fa-check"></i></span>` : ''}
                 ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
                 ${card.pinned ? '<span class="cb_tmark" title="มีแชทที่ปักหมุด"><i class="fa-solid fa-thumbtack"></i></span>' : ''}
                 ${card.type === 'group' ? '<span class="cb_tmark" title="กลุ่ม"><i class="fa-solid fa-users"></i></span>' : ''}
@@ -278,7 +421,7 @@ export const galleryUi = {
             </div>
             <div class="cb_tileinfo">
                 <b>${esc(card.name)}</b>
-                <span>${isOpen ? '<em>เปิดอยู่</em> · ' : ''}${card.count} แชท · ${esc(relTime(card.last))}</span>
+                <span>${isOpen ? '<em>เปิดอยู่</em> · ' : ''}${sub}</span>
             </div>
         </div>`;
     },
@@ -306,13 +449,17 @@ export const galleryUi = {
                     <div class="cb_herosub">
                         ${creditHtml(m.creator, { icon: 'fa-solid fa-feather-pointed', title: 'ผู้สร้างการ์ด' })}
                         ${creditHtml(m.version, { prefix: 'v', title: 'เวอร์ชันการ์ด', maxText: 16 })}
-                        <span><i class="fa-regular fa-comments"></i>${card.count} แชท</span>
-                        <span><i class="fa-regular fa-message"></i>${card.total.toLocaleString('th-TH')} ข้อความ</span>
+                        ${card.count ? `<span><i class="fa-regular fa-comments"></i>${card.count} แชท</span>
+                        <span><i class="fa-regular fa-message"></i>${card.total.toLocaleString('th-TH')} ข้อความ</span>` : '<span class="rv_nochat"><i class="fa-regular fa-comments"></i>ยังไม่มีแชท</span>'}
                         ${card.last ? `<span title="${esc(fullTime(card.last))}"><i class="fa-regular fa-clock"></i>${esc(relTime(card.last))}</span>` : ''}
                     </div>
                     ${m.members?.length ? `<div class="cb_members">${m.members.map(x => `<span title="${esc(x.name)}"><img src="${esc(x.thumb)}" alt="" loading="lazy">${esc(x.name)}</span>`).join('')}</div>` : ''}
                     ${m.tags.length ? `<div class="cb_tags">${m.tags.map(t => `<button class="cb_tag" data-tag="${esc(t.name)}"${tagStyle(t)} title="ค้นหาการ์ดที่มีแท็กนี้">${esc(t.name)}</button>`).join('')}</div>` : ''}
-                    <button class="cb_btn cb_primary cb_continue" data-continue="${esc(card.head.key)}"><i class="fa-solid ${isOpen ? 'fa-eye' : 'fa-play'}"></i>${isOpen ? 'กลับไปที่แชท' : 'คุยต่อแชทล่าสุด'}</button>
+                    <div class="rv_actions">
+                        ${card.head ? `<button class="cb_btn cb_primary cb_continue" data-continue="${esc(card.head.key)}"><i class="fa-solid ${isOpen ? 'fa-eye' : 'fa-play'}"></i>${isOpen ? 'กลับไปที่แชท' : 'คุยต่อแชทล่าสุด'}</button>` : ''}
+                        <button class="cb_btn${card.head ? '' : ' cb_primary'} rv_newchat" data-newchat="1"><i class="fa-solid fa-plus"></i>เริ่มแชทใหม่</button>
+                        ${card.type === 'character' ? '<button class="cb_btn rv_edit" data-edit="1"><i class="fa-solid fa-pen-to-square"></i>แก้ไขการ์ด</button>' : ''}
+                    </div>
                 </div>
             </div>
             ${m.note ? `<div class="cb_cnote${this.noteOpen ? ' cb_open' : ''}">
@@ -321,7 +468,7 @@ export const galleryUi = {
                 <button class="cb_notemore" data-note="1"${this.noteOpen ? '' : ' hidden'}>${this.noteOpen ? 'ย่อ<i class="fa-solid fa-chevron-up"></i>' : 'อ่านต่อ<i class="fa-solid fa-chevron-down"></i>'}</button>
             </div>` : ''}
             <div class="cb_cardchats"><i class="fa-regular fa-comments"></i>แชทของการ์ดนี้<span>${card.count}</span></div>
-            ${this.entries.length ? '' : '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ไม่มีแชท</span></div>'}
+            ${this.entries.length ? '' : '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ยังไม่มีแชท<br><small>แตะ “เริ่มแชทใหม่” เพื่อคุยกับการ์ดนี้</small></span></div>'}
         </div>`;
     },
 

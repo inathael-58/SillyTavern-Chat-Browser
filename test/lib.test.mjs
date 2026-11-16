@@ -219,7 +219,7 @@ test('tagCounts and addedAt', async () => {
     const { tagCounts, addedAt } = await import('../lib.js');
     assert.deepEqual(tagCounts([{ tags: ['b', 'a'] }, { tags: ['a', 'a'] }, { tags: [] }]), [{ name: 'a', count: 2 }, { name: 'b', count: 1 }]);
     assert.equal(addedAt({ create_date: '2024-01-02T03:04:05.000Z' }), Date.parse('2024-01-02T03:04:05.000Z'));
-    assert.equal(addedAt({ create_date: '2023-5-12 @21h 32m 29s 224ms' }), new Date(2023, 4, 12, 21, 32, 29).getTime());
+    assert.equal(addedAt({ create_date: '2023-5-12 @21h 32m 29s 224ms' }), new Date(2023, 4, 12, 21, 32, 29, 224).getTime());
     assert.equal(addedAt({ date_added: 1234 }), 1234);
     assert.equal(addedAt({}), 0);
 });

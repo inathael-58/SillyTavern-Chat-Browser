@@ -181,8 +181,8 @@ export function toMs(v, parseMoment) {
     if (!s) return 0;
     if (/^\d{10,}$/.test(s)) return Number(s);
     // humanized: 2025-06-05@15h04m03s (optionally with ms)
-    const h = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s*@\s*(\d{1,2})h\s*(\d{1,2})m\s*(\d{1,2})s/);
-    if (h) return new Date(+h[1], +h[2] - 1, +h[3], +h[4], +h[5], +h[6]).getTime();
+    const h = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s*@\s*(\d{1,2})h\s*(\d{1,2})m\s*(\d{1,2})s(?:\s*(\d{1,3})ms)?/);
+    if (h) return new Date(+h[1], +h[2] - 1, +h[3], +h[4], +h[5], +h[6], +(h[7] ?? 0)).getTime();
     if (parseMoment) {
         try { const m = parseMoment(s); const n = m?.valueOf?.(); if (Number.isFinite(n) && n > 0) return n; } catch { /* fall through */ }
     }
