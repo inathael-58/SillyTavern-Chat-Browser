@@ -470,6 +470,23 @@
     font-variant-numeric: tabular-nums;
 }
 .cb_unread .cb_time { color: var(--cb-accent); font-weight: 700; }
+/* message count on the row's first line, just before the time (the detail view has it in .cb_meta) */
+.cb_count {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-left: 6px;
+    font-size: 0.76em;
+    color: var(--cb-muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.cb_count i { font-size: 0.92em; }
+.cb_count + .cb_time { margin-left: 0; padding-left: 8px; }
+.cb_root[data-view="detail"] .cb_count { display: none; }
+.cb_root[data-view="detail"] .cb_count + .cb_time { margin-left: auto; padding-left: 6px; }
 
 .cb_pill {
     flex: none;
@@ -708,7 +725,8 @@
 .cb_root[data-view="compact"] .cb_row:has(.cb_partlist) { align-items: start; }
 .cb_root[data-view="compact"] .cb_side { flex-direction: row; align-items: center; align-self: center; }
 .cb_root[data-view="compact"] .cb_more { margin-top: 0 !important; }
-.cb_root[data-view="compact"] .cb_row .cb_time { order: 3; }
+.cb_root[data-view="compact"] .cb_row .cb_time,
+.cb_root[data-view="compact"] .cb_row .cb_count { order: 3; }
 
 /* detail: read more of the last message */
 .cb_root[data-view="detail"] .cb_ava { width: 54px; height: 54px; }

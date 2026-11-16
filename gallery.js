@@ -316,6 +316,31 @@ export async function handOffToBulk(avatars, action) {
     return false;
 }
 
+// ------------------------------------------------ hand-off to Card Updater
+
+/** Card Updater 1.6.0+ (with CardUpdater.open) is installed. */
+export const cardUpdaterAvailable = () => typeof globalThis.CardUpdater?.open === 'function';
+
+/**
+ * Update this character from a file with Card Updater: its file picker, dialog and summary.
+ * Call straight from the tap with nothing awaited before — iOS opens a file picker only inside a
+ * user gesture, and CardUpdater.open() opens it at once. Reverie stays open on the card page and
+ * reloads once the update is done.
+ */
+export function updateFromFile(avatar) {
+    const cu = globalThis.CardUpdater;
+    if (typeof cu?.open !== 'function') { toast.warn('ต้องใช้ Card Updater 1.6.0 ขึ้นไป'); return; }
+    let run;
+    try { run = cu.open({ avatar }); } catch (e) { run = Promise.reject(e); }
+    Promise.resolve(run).then(r => {
+        // 'failed' can still mean a partial update, so reload for anything but a cancel
+        if (r?.status !== 'cancelled') app.reload?.();
+    }, e => {
+        console.error('[Reverie]', e);
+        toast.err(`เปิด Card Updater ไม่สำเร็จ: ${errText(e)}`);
+    });
+}
+
 export function openCard(id) {
     const list = ui.root?.querySelector('.cb_list');
     if (!list || !id) return;
@@ -459,6 +484,7 @@ export const galleryUi = {
                         ${card.head ? `<button class="cb_btn cb_primary cb_continue" data-continue="${esc(card.head.key)}"><i class="fa-solid ${isOpen ? 'fa-eye' : 'fa-play'}"></i>${isOpen ? 'กลับไปที่แชท' : 'คุยต่อแชทล่าสุด'}</button>` : ''}
                         <button class="cb_btn${card.head ? '' : ' cb_primary'} rv_newchat" data-newchat="1"><i class="fa-solid fa-plus"></i>เริ่มแชทใหม่</button>
                         ${card.type === 'character' ? '<button class="cb_btn rv_edit" data-edit="1"><i class="fa-solid fa-pen-to-square"></i>แก้ไขการ์ด</button>' : ''}
+                        ${card.type === 'character' && cardUpdaterAvailable() ? '<button class="cb_btn rv_cuupdate" data-cuupdate="1" title="เลือกไฟล์การ์ด, lorebook หรือ regex มาอัปเดตตัวละครนี้ (Card Updater)"><i class="fa-solid fa-file-arrow-up"></i>อัปเดตจากไฟล์</button>' : ''}
                     </div>
                 </div>
             </div>
