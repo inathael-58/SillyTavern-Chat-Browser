@@ -8,8 +8,8 @@
  * them). Every keystroke is also kept as a draft in localStorage, so a reload loses nothing.
  */
 
-import { ctx, esc, toast, errText, st, charIndex, charOf, thumb, post, lsGet, ui, sheet } from './core.js';
-import { CARD_FIELDS, readCard, diffCard, cardPatch, applyCard, moveItem, parseTags } from './lib.js';
+import { ctx, esc, toast, errText, st, charIndex, charOf, thumb, post, lsGet, ui, sheet, avatarChanged } from './core.js';
+import { CARD_FIELDS, readCard, diffCard, cardPatch, applyCard, moveItem, parseTags, initialView, clampView, zoomView, cropOf, outputSize } from './lib.js';
 
 const DRAFT_PREFIX = 'rv_draft_v1:';
 
@@ -37,7 +37,7 @@ const GROUPS = [
 const kindOf = key => CARD_FIELDS.find(f => f.key === key)?.kind ?? 'text';
 const ROLES = [['system', 'System'], ['user', 'User'], ['assistant', 'Assistant']];
 
-let ed = null; // the open editor: { avatar, el, base, work, fsheet, advOpen }
+let ed = null; // the open editor: { avatar, el, base, work, fsheet, advOpen, prevAvatar }
 
 const clone = v => JSON.parse(JSON.stringify(v));
 const oneLine = (t, n = 140) => { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n)}…` : s; };
@@ -177,6 +177,12 @@ export async function openEditor(avatar) {
     ed = { avatar, el, base: null, work: null, fsheet: null, advOpen: false };
     requestAnimationFrame(() => el.classList.add('cb_in'));
     el.addEventListener('click', onEditorClick);
+    el.addEventListener('change', e => {
+        if (e.target.id !== 'rv_avafile') return;
+        const file = e.target.files?.[0];
+        e.target.value = ''; // the same picture can be picked again
+        if (file && ed?.work && !ed.fsheet) openAvatarCrop(file);
+    });
     try {
         const c = ctx();
         // the card as it is in the file now (also loads the full card when SillyTavern only has its summary)
@@ -210,7 +216,13 @@ function renderEditor() {
     const top = body.scrollTop;
     const d = ed.draft;
     body.innerHTML = `
-        <div class="rv_ehero"><img src="${esc(thumb('avatar', ed.avatar))}" alt=""><div><b>${esc(ed.work.name || '(ไม่มีชื่อ)')}</b><small>${esc(ed.avatar)}</small></div></div>
+        <div class="rv_ehero">
+            <label class="rv_eava" for="rv_avafile" title="เปลี่ยนรูปการ์ด"><img src="${esc(thumb('avatar', ed.avatar))}" alt=""><span class="rv_eavacam"><i class="fa-solid fa-camera"></i></span></label>
+            <div><b>${esc(ed.work.name || '(ไม่มีชื่อ)')}</b><small>${esc(ed.avatar)}</small>
+                <span class="rv_eavabtns"><label class="cb_btn cb_small" for="rv_avafile"><i class="fa-solid fa-image"></i>เปลี่ยนรูปการ์ด</label>${ed.prevAvatar ? '<button class="cb_btn cb_small" data-avaundo><i class="fa-solid fa-rotate-left"></i>ย้อนรูปเดิม</button>' : ''}</span>
+            </div>
+            <input type="file" id="rv_avafile" accept="image/*" hidden>
+        </div>
         ${d ? `<div class="rv_draft"><i class="fa-solid fa-clock-rotate-left"></i><span>มีร่างที่ยังไม่ได้บันทึก ${Object.keys(d.fields).length} ช่อง<small>${esc(new Date(d.at).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }))}</small></span>
             <button class="cb_btn cb_small" data-draft="drop">ทิ้ง</button><button class="cb_btn cb_small cb_primary" data-draft="use">กู้คืน</button></div>` : ''}
         ${GROUPS.map(g => {
@@ -266,6 +278,7 @@ async function onEditorClick(e) {
     if (t.closest('[data-eback]')) { closeEditorGuarded(); return; }
     if (t.closest('[data-esave]')) { saveNow(); return; }
     if (t.closest('[data-adv]')) { ed.advOpen = !t.closest('[data-adv]').classList.contains('cb_on'); renderEditor(); return; }
+    if (t.closest('[data-avaundo]')) { undoAvatar(); return; }
     const dr = t.closest('[data-draft]');
     if (dr) {
         if (dr.dataset.draft === 'use') Object.assign(ed.work, clone(ed.draft.fields));
@@ -620,6 +633,190 @@ function swipePreview(redraw) {
         if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.8) { i += dx < 0 ? 1 : -1; draw(); }
     }, { passive: true });
     draw();
+}
+
+// ---------------------------------------------------------------- card picture
+//
+// The picked picture is cropped here to SillyTavern's 2:3 avatar shape (drag, pinch or the slider
+// to zoom) and drawn into a PNG by the browser: whatever it can open works (an iPhone photo too),
+// and the photo's rotation is already applied. SillyTavern's /edit-avatar then puts it on the card
+// and keeps the card's data. It is written at once (not with "บันทึก"), and every picture of the
+// card on the page is redrawn (core.js avatarChanged), so the change shows right away.
+
+/** Put a picture (Blob) on the card through SillyTavern's own endpoint. */
+async function uploadAvatar(avatar, blob) {
+    const headers = { ...ctx().getRequestHeaders() };
+    delete headers['Content-Type']; // multipart: the browser sets it with the boundary
+    const form = new FormData();
+    form.append('avatar', new File([blob], avatar, { type: blob.type || 'image/png' }));
+    form.append('avatar_url', avatar);
+    const res = await fetch('/api/characters/edit-avatar', { method: 'POST', headers, body: form, cache: 'no-cache' });
+    if (!res.ok) throw new Error(`เซิร์ฟเวอร์ตอบ ${res.status}`);
+}
+
+/** Write a new picture, keep the old one for "ย้อนรูปเดิม", and show the change everywhere. */
+async function setAvatar(avatar, blob, { keepOld = true } = {}) {
+    let old = null;
+    if (keepOld) {
+        try {
+            const r = await fetch(`/characters/${encodeURIComponent(avatar)}`, { cache: 'no-store' });
+            if (r.ok) old = await r.blob();
+        } catch { /* no undo then */ }
+    }
+    await uploadAvatar(avatar, blob);
+    await avatarChanged(avatar);
+    if (ed?.avatar === avatar && keepOld) ed.prevAvatar = old;
+    if (ed?.avatar === avatar) renderEditor();
+    ui.render?.();
+}
+
+async function undoAvatar() {
+    if (!ed?.prevAvatar) return;
+    const { avatar, prevAvatar } = ed;
+    const btn = ed.el.querySelector('[data-avaundo]');
+    if (btn) btn.disabled = true;
+    try {
+        await setAvatar(avatar, prevAvatar, { keepOld: false });
+        if (ed?.avatar === avatar) { ed.prevAvatar = null; renderEditor(); }
+        toast.ok('ใช้รูปเดิมแล้ว');
+    } catch (e) {
+        console.error('[Reverie] avatar undo', e);
+        toast.err(`ย้อนรูปไม่สำเร็จ: ${errText(e)}`);
+        if (btn) btn.disabled = false;
+    }
+}
+
+function loadImage(file) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => resolve({ img, url });
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('เปิดรูปนี้ไม่ได้ — ลองไฟล์ PNG, JPEG หรือ WebP')); };
+        img.src = url;
+    });
+}
+
+async function openAvatarCrop(file) {
+    let loaded;
+    try { loaded = await loadImage(file); } catch (e) { toast.err(errText(e)); return; }
+    if (!ed?.work || ed.fsheet) { URL.revokeObjectURL(loaded.url); return; }
+    const { img: picture, url } = loaded;
+    const nat = { w: picture.naturalWidth, h: picture.naturalHeight };
+    const resize = !ctx().powerUserSettings?.never_resize_avatars;
+    const el = fieldShell({
+        title: 'รูปการ์ด',
+        hint: 'ลากเพื่อเลื่อน · ซูมด้วยสองนิ้วหรือแถบด้านล่าง',
+        cls: 'rv_cropsheet',
+        actions: '<button class="cb_btn cb_primary" data-fdone>ใช้รูปนี้</button>',
+    });
+    const body = el.querySelector('.rv_fbody');
+    body.innerHTML = `<div class="rv_crop"><div class="rv_cframe"><img class="rv_cimg" src="${esc(url)}" alt="" draggable="false"></div></div>
+        <div class="rv_czoom"><i class="fa-solid fa-magnifying-glass-minus"></i><input type="range" min="1" max="6" step="0.01" value="1" aria-label="ซูม"><i class="fa-solid fa-magnifying-glass-plus"></i></div>
+        <p class="cb_note rv_cnote">${resize ? `บันทึกเป็นรูป ${512}×${768} เท่ากับที่ SillyTavern ครอปให้` : 'SillyTavern ตั้งไว้ไม่ย่อรูปตัวละคร: บันทึกตามขนาดที่ครอป (ยาวสุด 2048px)'} · กด “ใช้รูปนี้” แล้วเปลี่ยนรูปในการ์ดทันที ไม่ต้องกดบันทึก ข้อมูลการ์ดไม่เปลี่ยน · ย้อนรูปเดิมได้จนกว่าจะปิดตัวแก้ไข</p>`;
+    const area = body.querySelector('.rv_crop');
+    const frameEl = body.querySelector('.rv_cframe');
+    const imgEl = body.querySelector('.rv_cimg');
+    const range = body.querySelector('input[type="range"]');
+    let frame = { w: 0, h: 0 };
+    let view = null;
+
+    const draw = () => {
+        const s = Math.max(frame.w / nat.w, frame.h / nat.h) * view.zoom;
+        imgEl.style.width = `${nat.w * s}px`;
+        imgEl.style.height = `${nat.h * s}px`;
+        imgEl.style.transform = `translate(${view.x}px, ${view.y}px)`;
+        range.value = String(view.zoom);
+    };
+    /** The largest 2:3 frame that fits; the view keeps its place when the size changes (rotation, keyboard). */
+    const layout = () => {
+        const w0 = Math.max(120, Math.min(area.clientWidth - 24, (area.clientHeight - 24) * 2 / 3, 460));
+        const next = { w: Math.round(w0), h: Math.round(w0 * 1.5) };
+        if (next.w === frame.w && view) return;
+        view = view ? clampView({ zoom: view.zoom, x: view.x * next.w / frame.w, y: view.y * next.h / frame.h }, nat, next) : initialView(nat, next);
+        frame = next;
+        frameEl.style.width = `${frame.w}px`;
+        frameEl.style.height = `${frame.h}px`;
+        draw();
+    };
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(layout) : null;
+    ro?.observe(area);
+    requestAnimationFrame(layout);
+
+    // drag with one finger, pinch with two; the wheel zooms on a computer
+    const pts = new Map();
+    let last = null; // { x, y, dist }
+    const pos = e => { const r = frameEl.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const gesture = () => {
+        const p = [...pts.values()];
+        if (p.length === 1) return { x: p[0].x, y: p[0].y, dist: 0 };
+        return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2, dist: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) };
+    };
+    frameEl.addEventListener('pointerdown', e => {
+        frameEl.setPointerCapture?.(e.pointerId);
+        pts.set(e.pointerId, pos(e));
+        last = gesture();
+    });
+    frameEl.addEventListener('pointermove', e => {
+        if (!pts.has(e.pointerId) || !view) return;
+        pts.set(e.pointerId, pos(e));
+        const g = gesture();
+        let v = { ...view, x: view.x + g.x - last.x, y: view.y + g.y - last.y };
+        if (g.dist && last.dist) v = zoomView(v, v.zoom * g.dist / last.dist, g.x, g.y, nat, frame);
+        view = clampView(v, nat, frame);
+        last = g;
+        draw();
+    });
+    const lift = e => { pts.delete(e.pointerId); last = pts.size ? gesture() : null; };
+    frameEl.addEventListener('pointerup', lift);
+    frameEl.addEventListener('pointercancel', lift);
+    frameEl.addEventListener('wheel', e => {
+        if (!view) return;
+        e.preventDefault();
+        const p = pos(e);
+        view = zoomView(view, view.zoom * Math.exp(-e.deltaY / 400), p.x, p.y, nat, frame);
+        draw();
+    }, { passive: false });
+    range.addEventListener('input', () => {
+        if (!view) return;
+        view = zoomView(view, Number(range.value), frame.w / 2, frame.h / 2, nat, frame);
+        draw();
+    });
+
+    let busy = false;
+    const close = () => { ro?.disconnect(); URL.revokeObjectURL(url); if (ed?.fsheet?.el === el) ed.fsheet = null; dropShell(el); };
+    const done = async () => {
+        if (busy || !view || !ed) return;
+        busy = true;
+        const btn = el.querySelector('[data-fdone]');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>กำลังเปลี่ยนรูป…';
+        const avatar = ed.avatar;
+        try {
+            const crop = cropOf(view, nat, frame);
+            const out = outputSize(crop, resize);
+            const canvas = document.createElement('canvas');
+            canvas.width = out.w;
+            canvas.height = out.h;
+            const g = canvas.getContext('2d');
+            g.imageSmoothingQuality = 'high';
+            g.drawImage(picture, crop.x, crop.y, crop.width, crop.height, 0, 0, out.w, out.h);
+            const blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('สร้างรูปไม่ได้ (รูปใหญ่เกินไป?)'))), 'image/png'));
+            await setAvatar(avatar, blob);
+            close();
+            toast.ok('เปลี่ยนรูปการ์ดแล้ว');
+        } catch (e) {
+            console.error('[Reverie] avatar', e);
+            toast.err(`เปลี่ยนรูปไม่สำเร็จ: ${errText(e)}`);
+            busy = false;
+            btn.disabled = false;
+            btn.textContent = 'ใช้รูปนี้';
+        }
+    };
+    const requestClose = () => { if (!busy) close(); };
+    el.querySelector('[data-fx]').addEventListener('click', requestClose);
+    el.querySelector('[data-fdone]').addEventListener('click', done);
+    el._close = requestClose;
+    ed.fsheet = { el, requestClose };
 }
 
 // ---------------------------------------------------------------- tags

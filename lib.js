@@ -590,3 +590,97 @@ export function parseTags(text) {
     const seen = new Set();
     return String(text ?? '').split(/[,\n]/).map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
 }
+
+// ---------------------------------------------------------------- card picture: crop frame and cache busting
+//
+// The crop frame is a 2:3 window (SillyTavern's avatar shape) over the picture. The picture
+// covers the frame at zoom 1; `view` is { zoom, x, y }: the zoom and where the picture's top-left
+// corner sits, in frame pixels (x, y ≤ 0, so the frame never shows past the picture's edge).
+
+export const AVATAR_W = 512;
+export const AVATAR_H = 768;
+
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The scale at which the picture just covers the frame. */
+export function coverScale(img, frame) {
+    return Math.max(frame.w / img.w, frame.h / img.h);
+}
+
+/** `view` kept inside the picture, zoom between 1 and maxZoom. */
+export function clampView(view, img, frame, maxZoom = 6) {
+    const zoom = clampTo(Number(view.zoom) || 1, 1, maxZoom);
+    const s = coverScale(img, frame) * zoom;
+    return {
+        zoom,
+        x: clampTo(view.x, frame.w - img.w * s, 0),
+        y: clampTo(view.y, frame.h - img.h * s, 0),
+    };
+}
+
+/** The first view: zoom 1, centred across, a little above the middle down (faces are near the top). */
+export function initialView(img, frame) {
+    const s = coverScale(img, frame);
+    return clampView({ zoom: 1, x: (frame.w - img.w * s) / 2, y: (frame.h - img.h * s) * 0.2 }, img, frame);
+}
+
+/** Zoom to `zoom` keeping the frame point (cx, cy) on the same spot of the picture. */
+export function zoomView(view, zoom, cx, cy, img, frame, maxZoom = 6) {
+    const z = clampTo(zoom, 1, maxZoom);
+    const k = z / view.zoom;
+    return clampView({ zoom: z, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k }, img, frame, maxZoom);
+}
+
+/** The part of the picture inside the frame, in the picture's own pixels (whole numbers, inside it). */
+export function cropOf(view, img, frame) {
+    const s = coverScale(img, frame) * view.zoom;
+    const width = Math.max(1, Math.min(img.w, Math.round(frame.w / s)));
+    const height = Math.max(1, Math.min(img.h, Math.round(frame.h / s)));
+    return {
+        x: clampTo(Math.round(-view.x / s), 0, img.w - width),
+        y: clampTo(Math.round(-view.y / s), 0, img.h - height),
+        width, height,
+    };
+}
+
+/**
+ * The size of the saved picture: SillyTavern's 512×768 unless it is set to never resize avatars;
+ * then the cropped size, scaled down to `maxSide` (phone browsers can't draw huge canvases).
+ */
+export function outputSize(crop, resize, maxSide = 2048) {
+    if (resize) return { w: AVATAR_W, h: AVATAR_H };
+    const k = Math.min(1, maxSide / Math.max(crop.width, crop.height));
+    return { w: Math.max(1, Math.round(crop.width * k)), h: Math.max(1, Math.round(crop.height * k)) };
+}
+
+/**
+ * Does this image URL show the character file `avatar`? SillyTavern's thumbnail
+ * (/thumbnail?type=avatar&file=…) or the full picture (/characters/…).
+ */
+export function isAvatarUrl(src, avatar, base = 'http://localhost/') {
+    if (!src || !avatar) return false;
+    let u;
+    try { u = new URL(src, base); } catch { return false; }
+    if (u.pathname === '/thumbnail') return u.searchParams.get('type') === 'avatar' && u.searchParams.get('file') === avatar;
+    if (!u.pathname.startsWith('/characters/')) return false;
+    try { return decodeURIComponent(u.pathname.slice('/characters/'.length)) === avatar; } catch { return false; }
+}
+
+/** `src` with the cache-busting version `v` (query parameter `rv`), relative URLs kept relative. */
+export function withVersion(src, v) {
+    if (!v) return src;
+    const s = String(src);
+    const hash = s.indexOf('#');
+    const main = hash < 0 ? s : s.slice(0, hash);
+    const tail = hash < 0 ? '' : s.slice(hash);
+    const q = main.indexOf('?');
+    const path = q < 0 ? main : main.slice(0, q);
+    const params = new URLSearchParams(q < 0 ? '' : main.slice(q + 1));
+    params.set('rv', String(v));
+    return `${path}?${params.toString()}${tail}`;
+}
+
+/** The `rv` version in a URL, or ''. */
+export function versionOf(src) {
+    try { return new URL(src, 'http://localhost/').searchParams.get('rv') ?? ''; } catch { return ''; }
+}

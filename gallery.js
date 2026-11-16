@@ -3,12 +3,11 @@
  * (picture, creator, tags, creator's note and the card's chats).
  */
 
-import { ctx, settings, saveSettings, esc, toast, errText, st, charOf, charIndex, groupOf, thumb, currentKey, isGenerating, data, ui, app, sheet } from './core.js';
+import { ctx, settings, saveSettings, esc, toast, errText, st, charOf, charIndex, groupOf, thumb, currentKey, isGenerating, data, ui, app, sheet, fullAvatar } from './core.js';
 import { addedAt, fullTime, noteText, relTime, tagCounts } from './lib.js';
 
 // ---------------------------------------------------------------- gallery cards
 
-const fullAvatar = file => `/characters/${encodeURIComponent(file)}`;
 
 // ---------------------------------------------------------------- gallery covers
 //

@@ -1821,6 +1821,38 @@ body.no-blur .cb_root :is(.cb_panel, .cb_section) { background: var(--cb-solid);
 .rv_ehero { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; }
 .rv_ehero img { width: 52px; height: 52px; border-radius: 14px; object-fit: cover; object-position: center 18%; flex: none; background: var(--cb-faint); }
 .rv_ehero > div { display: flex; flex-direction: column; min-width: 0; }
+/* the picture is a button too: tap it to change the card picture */
+.rv_eava { position: relative; flex: none; display: block; cursor: pointer; margin: 0; }
+.rv_eava img { width: 64px; height: 96px; border-radius: 12px; object-position: center 18%; }
+.rv_eavacam {
+    position: absolute; right: -4px; bottom: -4px;
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--cb-accent); color: var(--cb-on-accent); font-size: 12px;
+    box-shadow: 0 0 0 2px var(--cb-solid);
+}
+.rv_eavabtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.rv_eavabtns .cb_btn { margin: 0; }
+.rv_eavabtns label.cb_btn { cursor: pointer; }
+.rv_eavabtns .cb_btn i { margin-right: 5px; }
+
+/* crop sheet: a 2:3 window over the picture */
+.rv_cropsheet .rv_fbody { overflow: hidden; }
+.rv_crop { flex: 1 1 auto; min-height: 180px; display: flex; align-items: center; justify-content: center; }
+.rv_cframe {
+    position: relative; overflow: hidden; flex: none;
+    width: 200px; height: 300px;
+    border-radius: 14px;
+    background: var(--cb-faint);
+    box-shadow: 0 0 0 1px var(--cb-line), 0 14px 34px -18px rgba(0, 0, 0, 0.6);
+    touch-action: none; cursor: grab;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.rv_cframe:active { cursor: grabbing; }
+.rv_cimg { position: absolute; left: 0; top: 0; max-width: none !important; max-height: none !important; transform-origin: 0 0; pointer-events: none; }
+.rv_czoom { flex: none; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: var(--cb-muted); }
+.rv_czoom input { flex: 1; min-width: 0; accent-color: var(--cb-accent); }
+.rv_cnote { flex: none; margin: 0; }
 .rv_ehero b { font-size: 1.1em; }
 .rv_ehero small { color: var(--cb-muted); font-size: 0.76em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv_draft {

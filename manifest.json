@@ -6,8 +6,8 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Kitima",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "homePage": "https://github.com/inathael-58/SillyTavern-Reverie",
     "auto_update": false,
-    "description": "Reverie (formerly Chat Browser): a phone-first library of every character and group card, with every chat of each in one list. Open in one tap, start a new chat, filter by tags and favourites, edit a card's fields comfortably on a phone, story chains (Memory Hub), unread counts, pin / rename / delete / export, Bulk Manager and Card Updater hand-off, message counts in every view, and Sync / Clean Sync through Chat Auto Backup."
+    "description": "Reverie (formerly Chat Browser): a phone-first library of every character and group card, with every chat of each in one list. Open in one tap, start a new chat, filter by tags and favourites, edit a card's fields and picture comfortably on a phone, linked chats as episodes (Memory Hub), unread counts, pin / rename / delete / export, Bulk Manager and Card Updater hand-off, message counts in every view, and Sync / Clean Sync through Chat Auto Backup."
 }
