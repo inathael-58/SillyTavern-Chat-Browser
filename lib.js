@@ -181,8 +181,8 @@ export function toMs(v, parseMoment) {
     if (!s) return 0;
     if (/^\d{10,}$/.test(s)) return Number(s);
     // humanized: 2025-06-05@15h04m03s (optionally with ms)
-    const h = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s*@\s*(\d{1,2})h\s*(\d{1,2})m\s*(\d{1,2})s/);
-    if (h) return new Date(+h[1], +h[2] - 1, +h[3], +h[4], +h[5], +h[6]).getTime();
+    const h = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s*@\s*(\d{1,2})h\s*(\d{1,2})m\s*(\d{1,2})s(?:\s*(\d{1,3})ms)?/);
+    if (h) return new Date(+h[1], +h[2] - 1, +h[3], +h[4], +h[5], +h[6], +(h[7] ?? 0)).getTime();
     if (parseMoment) {
         try { const m = parseMoment(s); const n = m?.valueOf?.(); if (Number.isFinite(n) && n > 0) return n; } catch { /* fall through */ }
     }
@@ -382,32 +382,44 @@ export function renameInMeta(meta, oldId, newId) {
 // ---------------------------------------------------------------- gallery
 
 /**
- * One card per character / group, for the gallery.
+ * Cards for the gallery: one per character or group.
+ *   entities: every character and group ({ id, type, entity, name, fav, added, tags }), so cards
+ *             without a single chat (a card just imported) show too; without it, only cards with chats
+ *   tags:     only cards that have every one of these tags · fav: only favourites
+ *   sort:     recent | name | character | size | added
  *   extraText(id): more searchable text for a card (tags, creator) — id is "type|entity"
- * Search matches a card when every word is somewhere in its name, its extra text or any of its chats.
- * Returns [{ id, type, entity, name, head, chats, count, total, last, unread, pinned }]
+ * Returns [{ id, type, entity, name, head (null without chats), chats, count, total, last, unread, pinned, fav, added, tags }]
  */
-export function buildCards(chats, { sort = 'recent', query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0, extraText = () => '' } = {}) {
+export function buildCards(chats, { sort = 'recent', query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0, extraText = () => '', entities = null, tags = [], fav = false } = {}) {
     const q = String(query ?? '').trim().toLowerCase();
     const cards = new Map();
+    const make = (id, type, ent, name) => ({ id, type, entity: ent, name, head: null, chats: [], count: 0, total: 0, last: 0, unread: 0, pinned: false, personas: new Set(), fav: false, added: 0, tags: [] });
+    for (const e of entities ?? []) {
+        if (!e?.id || (entity && e.id !== entity) || cards.has(e.id)) continue;
+        if (filter === 'group' && e.type !== 'group') continue;
+        cards.set(e.id, Object.assign(make(e.id, e.type, e.entity, e.name), { fav: !!e.fav, added: Number(e.added) || 0, tags: Array.isArray(e.tags) ? e.tags : [] }));
+    }
     for (const c of chats) {
         const id = `${c.type}|${c.entity}`;
         if (entity && id !== entity) continue;
         if (filter === 'group' && c.type !== 'group') continue;
         let card = cards.get(id);
-        if (!card) cards.set(id, card = { id, type: c.type, entity: c.entity, name: c.entityName, head: c, chats: [], count: 0, total: 0, last: 0, unread: 0, pinned: false, personas: new Set() });
+        if (!card) cards.set(id, card = make(id, c.type, c.entity, c.entityName));
         card.chats.push(c);
         card.count++;
         card.total += c.count || 0;
         card.unread += unreadOf(c);
         card.pinned ||= !!pins[c.key];
         if (c.persona) card.personas.add(c.persona);
-        if ((c.last || 0) > card.last) { card.last = c.last || 0; card.head = c; }
+        if (!card.head || (c.last || 0) > card.last) { card.last = c.last || 0; card.head = c; }
     }
     let out = [...cards.values()];
     if (persona) out = out.filter(x => x.personas.has(persona));
     if (filter === 'unread') out = out.filter(x => x.unread > 0);
     if (filter === 'pinned') out = out.filter(x => x.pinned);
+    if (fav) out = out.filter(x => x.fav);
+    const want = (Array.isArray(tags) ? tags : []).map(t => String(t).toLowerCase());
+    if (want.length) out = out.filter(x => want.every(t => x.tags.some(y => String(y).toLowerCase() === t)));
     if (q) {
         const words = q.split(/\s+/);
         out = out.filter(x => {
@@ -415,15 +427,30 @@ export function buildCards(chats, { sort = 'recent', query = '', filter = 'all',
             return words.every(w => hay.includes(w));
         });
     }
-    const byRecent = (a, b) => b.last - a.last;
+    // a card nobody has talked to yet counts as active from the day it was added
+    const act = x => x.last || x.added;
+    const byRecent = (a, b) => act(b) - act(a);
     const cmp = {
         recent: byRecent,
         name: (a, b) => compareText(a.name, b.name) || byRecent(a, b),
         character: (a, b) => compareText(a.name, b.name) || byRecent(a, b),
         size: (a, b) => b.total - a.total || byRecent(a, b),
+        added: (a, b) => b.added - a.added || byRecent(a, b),
     }[sort] ?? byRecent;
     for (const x of out) delete x.personas;
     return out.sort(cmp);
+}
+
+/** Every tag on these cards with how many cards carry it, most used first. */
+export function tagCounts(cards) {
+    const m = new Map();
+    for (const c of cards) for (const t of new Set(c.tags || [])) m.set(t, (m.get(t) || 0) + 1);
+    return [...m.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || compareText(a.name, b.name));
+}
+
+/** When a character or group was added: its create_date, else the file date SillyTavern reports. */
+export function addedAt(x, parseMoment) {
+    return toMs(x?.create_date, parseMoment) || Number(x?.date_added) || 0;
 }
 
 /**
@@ -453,4 +480,113 @@ export function noteText(text, { char = '', user = '' } = {}) {
 export function fileName(name, ext) {
     const base = String(name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120) || 'chat';
     return `${base}.${ext}`;
+}
+
+// ---------------------------------------------------------------- card editor
+
+/**
+ * The fields of a character card the editor shows, and where each lives in the card.
+ * v1: the old top-level key (kept in sync by SillyTavern) · v2: the key under data.
+ */
+export const CARD_FIELDS = Object.freeze([
+    { key: 'name', v1: 'name', v2: 'name', kind: 'line' },
+    { key: 'description', v1: 'description', v2: 'description' },
+    { key: 'personality', v1: 'personality', v2: 'personality' },
+    { key: 'scenario', v1: 'scenario', v2: 'scenario' },
+    { key: 'first_mes', v1: 'first_mes', v2: 'first_mes' },
+    { key: 'alternate_greetings', v2: 'alternate_greetings', kind: 'list' },
+    { key: 'mes_example', v1: 'mes_example', v2: 'mes_example' },
+    { key: 'creator_notes', v1: 'creatorcomment', v2: 'creator_notes' },
+    { key: 'system_prompt', v2: 'system_prompt' },
+    { key: 'post_history_instructions', v2: 'post_history_instructions' },
+    { key: 'depth_prompt', kind: 'depth' },
+    { key: 'creator', v2: 'creator', kind: 'line' },
+    { key: 'character_version', v2: 'character_version', kind: 'line' },
+    { key: 'tags', v1: 'tags', v2: 'tags', kind: 'tags' },
+]);
+
+const DEPTH_DEFAULT = Object.freeze({ prompt: '', depth: 4, role: 'system' });
+const str = v => (v == null ? '' : String(v));
+const strList = v => (Array.isArray(v) ? v.map(str) : []);
+
+/**
+ * What the editor works on, read from a character as SillyTavern holds it. The fields SillyTavern's
+ * own editor reads from the top level (name, description, …) come from there first, the rest from data.
+ */
+export function readCard(ch) {
+    const d = ch?.data && typeof ch.data === 'object' ? ch.data : {};
+    const out = {};
+    for (const f of CARD_FIELDS) {
+        if (f.kind === 'depth') {
+            const dp = d.extensions?.depth_prompt || {};
+            const depth = Number(dp.depth);
+            out.depth_prompt = { prompt: str(dp.prompt), depth: Number.isFinite(depth) ? depth : DEPTH_DEFAULT.depth, role: ['system', 'user', 'assistant'].includes(dp.role) ? dp.role : DEPTH_DEFAULT.role };
+        } else if (f.kind === 'list') {
+            out[f.key] = strList(d[f.v2]);
+        } else if (f.kind === 'tags') {
+            out.tags = strList(Array.isArray(d.tags) ? d.tags : ch?.tags).map(t => t.trim()).filter(Boolean);
+        } else {
+            const top = f.v1 ? ch?.[f.v1] : undefined;
+            out[f.key] = str(top != null && top !== '' ? top : d[f.v2] ?? top);
+        }
+    }
+    return out;
+}
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** The keys whose values differ between two readCard() results. */
+export function diffCard(before, after) {
+    return CARD_FIELDS.map(f => f.key).filter(k => after?.[k] !== undefined && !same(before?.[k], after[k]));
+}
+
+/**
+ * The body for /api/characters/merge-attributes: only the changed fields, written both at the
+ * top level (v1) and under data (v2), as SillyTavern writes a card. The server merges it into
+ * the file, so everything else in the card (extensions, lorebook, …) stays as it is.
+ */
+export function cardPatch(avatar, values, keys) {
+    const out = { avatar, data: {} };
+    for (const k of keys) {
+        const f = CARD_FIELDS.find(x => x.key === k);
+        if (!f) continue;
+        const v = values[k];
+        if (f.kind === 'depth') {
+            out.data.extensions = { ...(out.data.extensions || {}), depth_prompt: { prompt: str(v?.prompt), depth: Number.isFinite(Number(v?.depth)) ? Number(v.depth) : DEPTH_DEFAULT.depth, role: v?.role || DEPTH_DEFAULT.role } };
+            continue;
+        }
+        const val = f.kind === 'list' ? strList(v) : f.kind === 'tags' ? strList(v).map(t => t.trim()).filter(Boolean) : str(v);
+        if (f.v1) out[f.v1] = val;
+        if (f.v2) out.data[f.v2] = val;
+    }
+    return out;
+}
+
+/** Put edited values into a character object in memory, the same way cardPatch writes them to the file. */
+export function applyCard(ch, values, keys) {
+    const p = cardPatch(ch?.avatar, values, keys);
+    delete p.avatar;
+    const merge = (t, src) => {
+        for (const [k, v] of Object.entries(src)) {
+            if (v && typeof v === 'object' && !Array.isArray(v)) merge(t[k] && typeof t[k] === 'object' ? t[k] : (t[k] = {}), v);
+            else t[k] = Array.isArray(v) ? [...v] : v;
+        }
+    };
+    merge(ch, p);
+    return ch;
+}
+
+/** A copy of a list with one item moved from one place to another (both clamped to the list). */
+export function moveItem(list, from, to) {
+    const out = [...list];
+    if (from < 0 || from >= out.length) return out;
+    const [x] = out.splice(from, 1);
+    out.splice(Math.max(0, Math.min(out.length, to)), 0, x);
+    return out;
+}
+
+/** Tags typed as text ("a, b , c") as a clean list without repeats. */
+export function parseTags(text) {
+    const seen = new Set();
+    return String(text ?? '').split(/[,\n]/).map(t => t.trim()).filter(t => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()));
 }

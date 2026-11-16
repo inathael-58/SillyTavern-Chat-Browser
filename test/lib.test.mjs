@@ -187,3 +187,105 @@ test('fileName strips characters no file system allows', async () => {
     assert.equal(fileName('A: b/c?', 'txt'), 'A_ b_c_.txt');
     assert.equal(fileName('', 'jsonl'), 'chat.jsonl');
 });
+
+test('buildCards includes cards without chats, filters by tags and favourites, sorts by date added', async () => {
+    const { buildCards } = await import('../lib.js');
+    const chats = [
+        { key: 'c:a.png:1', type: 'character', entity: 'a.png', entityName: 'Alice', chatId: '1', count: 10, last: 500 },
+    ];
+    const entities = [
+        { id: 'character|a.png', type: 'character', entity: 'a.png', name: 'Alice', fav: true, added: 100, tags: ['Fantasy', 'Romance'] },
+        { id: 'character|n.png', type: 'character', entity: 'n.png', name: 'New', fav: false, added: 900, tags: ['fantasy'] },
+        { id: 'character|o.png', type: 'character', entity: 'o.png', name: 'Old', fav: false, added: 50, tags: [] },
+        { id: 'group|g1', type: 'group', entity: 'g1', name: 'Party', fav: true, added: 300, tags: [] },
+    ];
+    const all = buildCards(chats, { entities });
+    assert.deepEqual(all.map(x => x.name), ['New', 'Alice', 'Party', 'Old']); // recent: last chat, else date added
+    const fresh = all.find(x => x.name === 'New');
+    assert.equal(fresh.count, 0);
+    assert.equal(fresh.head, null);
+    assert.equal(all.find(x => x.name === 'Alice').head.chatId, '1');
+    assert.deepEqual(buildCards(chats, { entities, sort: 'added' }).map(x => x.name), ['New', 'Party', 'Alice', 'Old']);
+    assert.deepEqual(buildCards(chats, { entities, fav: true }).map(x => x.name), ['Alice', 'Party']);
+    assert.deepEqual(buildCards(chats, { entities, tags: ['fantasy'] }).map(x => x.name), ['New', 'Alice']);
+    assert.deepEqual(buildCards(chats, { entities, tags: ['fantasy', 'romance'] }).map(x => x.name), ['Alice']);
+    assert.deepEqual(buildCards(chats, { entities, filter: 'group' }).map(x => x.name), ['Party']);
+    assert.deepEqual(buildCards(chats, { entities, filter: 'unread' }).map(x => x.name), []);
+    assert.deepEqual(buildCards(chats, { entities, entity: 'character|o.png' }).map(x => x.name), ['Old']);
+    assert.deepEqual(buildCards(chats, { entities, query: 'new' }).map(x => x.name), ['New']);
+});
+
+test('tagCounts and addedAt', async () => {
+    const { tagCounts, addedAt } = await import('../lib.js');
+    assert.deepEqual(tagCounts([{ tags: ['b', 'a'] }, { tags: ['a', 'a'] }, { tags: [] }]), [{ name: 'a', count: 2 }, { name: 'b', count: 1 }]);
+    assert.equal(addedAt({ create_date: '2024-01-02T03:04:05.000Z' }), Date.parse('2024-01-02T03:04:05.000Z'));
+    assert.equal(addedAt({ create_date: '2023-5-12 @21h 32m 29s 224ms' }), new Date(2023, 4, 12, 21, 32, 29, 224).getTime());
+    assert.equal(addedAt({ date_added: 1234 }), 1234);
+    assert.equal(addedAt({}), 0);
+});
+
+const sampleChar = () => ({
+    name: 'Mia', avatar: 'mia.png', description: 'top desc', personality: '', scenario: 'park', first_mes: 'Hi', mes_example: '',
+    creatorcomment: 'old note', tags: ['x'],
+    data: {
+        name: 'Mia', description: 'data desc', personality: 'shy', scenario: 'park', first_mes: 'Hi', mes_example: '',
+        creator_notes: 'note', system_prompt: 'sys', post_history_instructions: '', alternate_greetings: ['A', 'B'],
+        creator: 'Kit', character_version: '2', tags: ['fantasy', ' cute '],
+        extensions: { talkativeness: 0.5, world: 'Lore', depth_prompt: { prompt: 'remember', depth: 2, role: 'user' } },
+    },
+});
+
+test('readCard reads v1 first for the classic fields and data for the rest', async () => {
+    const { readCard } = await import('../lib.js');
+    const v = readCard(sampleChar());
+    assert.equal(v.description, 'top desc');
+    assert.equal(v.personality, 'shy');              // empty at the top level → data
+    assert.equal(v.creator_notes, 'old note');       // creatorcomment is the v1 name
+    assert.deepEqual(v.alternate_greetings, ['A', 'B']);
+    assert.deepEqual(v.tags, ['fantasy', 'cute']);
+    assert.deepEqual(v.depth_prompt, { prompt: 'remember', depth: 2, role: 'user' });
+    const bare = readCard({ name: 'X', data: {} });
+    assert.deepEqual(bare.depth_prompt, { prompt: '', depth: 4, role: 'system' });
+    assert.deepEqual(bare.alternate_greetings, []);
+    assert.equal(bare.system_prompt, '');
+});
+
+test('diffCard, cardPatch and applyCard write only what changed, in v1 and v2', async () => {
+    const { readCard, diffCard, cardPatch, applyCard } = await import('../lib.js');
+    const ch = sampleChar();
+    const before = readCard(ch);
+    const after = { ...before, description: 'new desc', alternate_greetings: ['B', 'A', 'C'], depth_prompt: { ...before.depth_prompt, depth: 6 }, creator_notes: 'fresh' };
+    const keys = diffCard(before, after);
+    assert.deepEqual(keys, ['description', 'alternate_greetings', 'creator_notes', 'depth_prompt']);
+    const p = cardPatch('mia.png', after, keys);
+    assert.deepEqual(p, {
+        avatar: 'mia.png',
+        description: 'new desc',
+        creatorcomment: 'fresh',
+        data: {
+            description: 'new desc',
+            alternate_greetings: ['B', 'A', 'C'],
+            creator_notes: 'fresh',
+            extensions: { depth_prompt: { prompt: 'remember', depth: 6, role: 'user' } },
+        },
+    });
+    assert.deepEqual(diffCard(before, readCard(ch)), []);
+    applyCard(ch, after, keys);
+    assert.equal(ch.description, 'new desc');
+    assert.equal(ch.data.description, 'new desc');
+    assert.equal(ch.data.extensions.world, 'Lore');  // untouched
+    assert.equal(ch.data.extensions.depth_prompt.depth, 6);
+    assert.deepEqual(ch.data.alternate_greetings, ['B', 'A', 'C']);
+    assert.deepEqual(diffCard(after, readCard(ch)), []);
+    const tagsPatch = cardPatch('mia.png', { tags: [' a ', '', 'b'] }, ['tags']);
+    assert.deepEqual(tagsPatch, { avatar: 'mia.png', tags: ['a', 'b'], data: { tags: ['a', 'b'] } });
+});
+
+test('moveItem and parseTags', async () => {
+    const { moveItem, parseTags } = await import('../lib.js');
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 0, 2), ['b', 'c', 'a']);
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 2, 0), ['c', 'a', 'b']);
+    assert.deepEqual(moveItem(['a', 'b', 'c'], 1, 9), ['a', 'c', 'b']);
+    assert.deepEqual(moveItem(['a', 'b'], 5, 0), ['a', 'b']);
+    assert.deepEqual(parseTags('a, b ,, A\nc'), ['a', 'b', 'c']);
+});

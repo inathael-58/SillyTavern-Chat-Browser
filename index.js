@@ -1,78 +1,28 @@
 /*
- * Chat Browser — SillyTavern UI extension
+ * Reverie (formerly Chat Browser) — SillyTavern UI extension
  *
  * Every chat of every character and group in one list: open any of them in one tap,
  * see which chats continue one story, which persona a chat is tied to and how many
  * messages arrived since this device last looked. Pin, rename, delete, link parts of a
  * story, and run Sync / Clean Sync through Chat Auto Backup.
+ *
+ * The gallery (gallery.js) is a library of every character and group card, and each
+ * character can be edited on a phone with the card editor (editor.js).
+ *
+ * Settings stay under the key "chat_browser" and the CSS prefix "cb_", so pins, unread
+ * counts and the launcher's look carry over from Chat Browser.
  */
 
 import { installThemePalette } from './theme-palette.js';
 import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
-import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, noteText, relTime, renameInMeta, toMs } from './lib.js';
-
-const MODULE = 'chat_browser';
-const VERSION = '1.5.0'; // keep in sync with manifest.json
-const LOG = '[ChatBrowser]';
-const BASE_URL = new URL('.', import.meta.url);
-const CACHE_KEY = 'cb_cache_v1';
-const SEEN_KEY = 'cb_seen_v1';
-const CHUNK = 80; // rows rendered at a time
-
-const DEFAULTS = Object.freeze({
-    view: 'normal',      // compact | normal | detail | gallery
-    sort: 'recent',      // recent | character | name | size
-    merge: true,         // one row per story
-    pins: Object.freeze({}),
-    pinsImported: false, // SillyTavern's own pinned chats copied in once
-    launcher: true,      // floating button
-    launcherPos: Object.freeze({ x: 0, y: 0.72, edge: 'left' }),
-    launcherLook: null,  // filled from LOOK_DEFAULT
-    topbar: true,        // icon in the top bar
-    topbarLook: null,    // filled from TOP_DEFAULT
-    scheme: 'theme',     // theme | light | dark — colours of the browser window
-    gallerySize: 'large', // large | compact — cover size in the gallery
-});
-
-const ctx = () => SillyTavern.getContext();
-
-function settings() {
-    const ext = ctx().extensionSettings;
-    if (!ext[MODULE]) ext[MODULE] = {};
-    const s = ext[MODULE];
-    for (const [k, v] of Object.entries(DEFAULTS)) {
-        if (s[k] === undefined) s[k] = (v && typeof v === 'object') ? { ...v } : v;
-    }
-    return s;
-}
-const saveSettings = () => ctx().saveSettingsDebounced();
-
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const toast = {
-    ok: (m, t) => globalThis.toastr?.success(m, t ?? 'Chat Browser'),
-    info: (m, t) => globalThis.toastr?.info(m, t ?? 'Chat Browser'),
-    warn: (m, t) => globalThis.toastr?.warning(m, t ?? 'Chat Browser'),
-    err: (m, t) => globalThis.toastr?.error(m, t ?? 'Chat Browser'),
-};
-const wait = ms => new Promise(r => setTimeout(r, ms));
-const errText = e => String(e?.message ?? e);
-const lsGet = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v ?? d; } catch { return d; } };
-const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full or blocked */ } };
-const cab = () => (globalThis.ChatAutoBackup?.api >= 2 ? globalThis.ChatAutoBackup : null);
-
-// SillyTavern functions that getContext() doesn't offer. Loaded on first use; each one
-// has a plain-API fallback, so an older or newer SillyTavern without it still works.
-let stMods = null;
-async function st() {
-    if (stMods) return stMods;
-    stMods = {};
-    try { Object.assign(stMods, await import('../../../../script.js')); } catch (e) { console.warn(LOG, 'script.js', e); }
-    try {
-        const g = await import('../../../group-chats.js');
-        Object.assign(stMods, { openGroupById: g.openGroupById, editGroup: g.editGroup, deleteGroupChatByName: g.deleteGroupChatByName, renameGroupChat: g.renameGroupChat });
-    } catch (e) { console.warn(LOG, 'group-chats.js', e); }
-    return stMods;
-}
+import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
+import {
+    VERSION, LOG, BASE_URL, CACHE_KEY, SEEN_KEY, CHUNK, DEFAULTS, ctx, settings, saveSettings, esc, toast, wait, errText, lsGet, lsSet, cab, st,
+    charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
+    sheet, sheetConfirm, sheetPrompt, sheetPick,
+} from './core.js';
+import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover, galleryEntities, pickTags, startNewChat, bulkAvailable, handOffToBulk } from './gallery.js';
+import { openEditor, editorOpen, closeEditor, closeEditorGuarded } from './editor.js';
 
 // ---------------------------------------------------------------- display regex
 //
@@ -152,50 +102,6 @@ function storyOf(text, rx, opts) {
     return hidden && hidden.length >= plain.length * 0.5 ? hidden : plain;
 }
 
-// ---------------------------------------------------------------- entities
-
-function charOf(avatar) { return (ctx().characters || []).find(c => c.avatar === avatar); }
-function charIndex(avatar) { return (ctx().characters || []).findIndex(c => c.avatar === avatar); }
-function groupOf(id) { return (ctx().groups || []).find(g => String(g.id) === String(id)); }
-
-function thumb(type, file) {
-    try { return ctx().getThumbnailUrl(type, file); } catch { return ''; }
-}
-
-function personaName(id) {
-    return ctx().powerUserSettings?.personas?.[id] || String(id ?? '').replace(/\.(png|webp|jpe?g)$/i, '');
-}
-
-/** The persona a chat is tied to: locked to the chat, or else connected to its character/group. */
-function personaOf(c) {
-    if (c.persona) return { id: c.persona, name: personaName(c.persona), locked: true };
-    const descs = ctx().powerUserSettings?.persona_descriptions || {};
-    for (const [id, d] of Object.entries(descs)) {
-        if (d?.connections?.some(x => x?.id === c.entity && (x.type === (c.type === 'group' ? 'group' : 'character')))) {
-            return { id, name: personaName(id), locked: false };
-        }
-    }
-    return null;
-}
-
-function currentKey() {
-    const c = ctx();
-    const id = c.getCurrentChatId?.();
-    if (!id) return null;
-    if (c.groupId) return `g:${c.groupId}:${id}`;
-    const ch = c.characters?.[c.characterId];
-    return ch ? `c:${ch.avatar}:${id}` : null;
-}
-
-function isGenerating() {
-    const el = document.getElementById('mes_stop');
-    return !!el && getComputedStyle(el).display !== 'none';
-}
-
-// ---------------------------------------------------------------- data
-
-const data = { chats: [], byKey: new Map(), at: 0, loading: null, error: '' };
-
 function normalize(x, rx = t => t) {
     const c = ctx();
     const file = String(x?.file_name ?? '');
@@ -233,12 +139,6 @@ function normalize(x, rx = t => t) {
         prev: typeof meta.chat_browser?.prev === 'string' ? meta.chat_browser.prev : null,
         mainChat: typeof meta.main_chat === 'string' && meta.main_chat ? meta.main_chat : null,
     };
-}
-
-async function post(url, body) {
-    const res = await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body ?? {}), cache: 'no-cache' });
-    if (!res.ok) throw Object.assign(new Error(`${url} → ${res.status}`), { status: res.status });
-    return res;
 }
 
 /** SillyTavern before 1.13 has no /api/chats/recent: ask per character and per group chat. */
@@ -621,9 +521,12 @@ const VIEWS = [
     ['detail', 'fa-solid fa-align-left', 'ละเอียด — อ่านข้อความล่าสุดได้ยาว'],
     ['gallery', 'fa-solid fa-table-cells-large', 'แกลเลอรี — ปกการ์ด แตะเพื่อดูรายละเอียดและแชทของการ์ดนั้น'],
 ];
-const SORTS = [['recent', 'ล่าสุด'], ['character', 'ตัวละคร'], ['name', 'ชื่อ'], ['size', 'ยาวสุด']];
+// 'character' is the list's own (sections per character); 'added' is the gallery's (cards by date added)
+const SORTS = [['recent', 'ล่าสุด'], ['character', 'ตัวละคร'], ['added', 'เพิ่มล่าสุด'], ['name', 'ชื่อ'], ['size', 'ยาวสุด']];
+/** The sort that applies in the current view: each view lacks one of the sorts. */
+const sortFor = (s, gallery) => (gallery ? (s.sort === 'character' ? 'name' : s.sort) : (s.sort === 'added' ? 'recent' : s.sort));
 
-const ui = {
+Object.assign(ui, {
     root: null,
     query: '',
     filter: 'all',      // all | unread | pinned | group
@@ -631,6 +534,7 @@ const ui = {
     persona: null,
     selecting: false,
     selected: new Set(),
+    selCards: new Set(), // gallery: cards picked for Bulk Manager ("type|entity")
     collapsed: new Set(), // character sections folded
     expanded: new Set(),  // stories showing their older parts
     history: new Map(),   // key → loaded recent messages (detail view)
@@ -660,17 +564,20 @@ const ui = {
         const opts = { query: this.query, filter: this.filter, entity: this.entity, persona: this.persona, pins: s.pins, unreadOf };
         let card = null;
         if (gallery) {
-            this.cards = buildCards(data.chats, { ...opts, sort: s.sort, extraText: cardSearchText });
+            // every character and group, also those without a chat yet
+            const entities = galleryEntities();
+            this.cards = buildCards(data.chats, { ...opts, sort: sortFor(s, true), extraText: cardSearchText, entities, tags: s.galleryTags, fav: s.galleryFav });
             // A card page lists every chat of that card, whatever the grid is filtered by.
-            if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf })[0] ?? null;
+            if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf, entities })[0] ?? null;
             if (!card) this.card = null;
+            const chatSort = sortFor(s, false);
             this.entries = card
-                ? buildEntries(data.chats, { sort: s.sort === 'character' ? 'recent' : s.sort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
+                ? buildEntries(data.chats, { sort: chatSort === 'character' ? 'recent' : chatSort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
                 : [];
             this.shownN = card ? card.count : this.cards.reduce((n, x) => n + x.count, 0);
         } else {
             this.card = null;
-            this.entries = buildEntries(data.chats, { ...opts, sort: s.sort, merge: s.merge });
+            this.entries = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge });
             this.shownN = this.entries.filter(e => e.kind === 'chat').length;
         }
         this.root.classList.toggle('cb_oncard', !!card);
@@ -711,6 +618,8 @@ const ui = {
         if (this.query) return `<div class="cb_empty"><i class="fa-solid fa-magnifying-glass"></i><span>ไม่พบแชทที่ตรงกับ “${esc(this.query)}”</span></div>`;
         if (this.filter === 'unread') return '<div class="cb_empty"><i class="fa-solid fa-check-double"></i><span>อ่านครบทุกแชทแล้ว</span></div>';
         if (this.filter === 'pinned') return '<div class="cb_empty"><i class="fa-solid fa-thumbtack"></i><span>ยังไม่ได้ปักหมุดแชทไหน<br><small>กด ⋯ ที่แชทแล้วเลือก “ปักหมุด”</small></span></div>';
+        const s = settings();
+        if (s.view === 'gallery' && (s.galleryTags.length || s.galleryFav)) return '<div class="cb_empty"><i class="fa-solid fa-filter-circle-xmark"></i><span>ไม่มีการ์ดที่ตรงกับตัวกรอง<br><button class="cb_btn rv_clearfilters" data-clearfilters="1">ล้างตัวกรอง</button></span></div>';
         return '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ไม่มีแชท</span></div>';
     },
 
@@ -865,121 +774,23 @@ const ui = {
         return `<div class="cb_history">${h.map(m => `<div class="cb_hmsg${m.user ? ' cb_huser' : ''}"><b>${esc(m.name)}</b><span>${esc(m.text)}</span></div>`).join('')}</div>`;
     },
 
-    // ------------------------------------------------ gallery
-
-    /**
-     * A cover: the small thumbnail first (blurred), the picture over it once loaded.
-     * In the grid both wait until the tile comes near the screen (watchCovers).
-     */
-    coverHtml(m, lazy = true) {
-        const src = lazy ? 'data-src' : 'src';
-        const img = (full, small) => `<img class="cb_thumb" ${src}="${esc(small)}" alt="" decoding="async"><img class="cb_full" ${src}="${esc(full)}" alt="" decoding="async">`;
-        if (m.collage) {
-            return `<div class="cb_tcollage" data-n="${m.collage.length}">${m.collage.map(x => `<div>${img(x.full, x.thumb)}</div>`).join('') || '<i class="fa-solid fa-users"></i>'}</div>`;
-        }
-        return img(m.full, m.thumb);
-    },
-
-    tileHtml(card, i) {
-        const m = cardMeta(card.id);
-        const cur = currentKey();
-        const isOpen = card.chats.some(c => c.key === cur);
-        // only the first screenful fades in one by one; the rest are off screen anyway
-        return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}" data-card="${esc(card.id)}" role="button" tabindex="0"${i < 40 ? ` data-a style="--i:${i}"` : ''} aria-label="${esc(card.name)} · ${card.count} แชท">
-            <div class="cb_cover">${this.coverHtml(m)}</div>
-            <div class="cb_tiletop">
-                ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
-                ${card.pinned ? '<span class="cb_tmark" title="มีแชทที่ปักหมุด"><i class="fa-solid fa-thumbtack"></i></span>' : ''}
-                ${card.type === 'group' ? '<span class="cb_tmark" title="กลุ่ม"><i class="fa-solid fa-users"></i></span>' : ''}
-                <span class="cb_tspace"></span>
-                ${card.unread ? `<span class="cb_badge" title="ข้อความใหม่">+${card.unread > 999 ? '999' : card.unread}</span>` : ''}
-            </div>
-            <div class="cb_tileinfo">
-                <b>${esc(card.name)}</b>
-                <span>${isOpen ? '<em>เปิดอยู่</em> · ' : ''}${card.count} แชท · ${esc(relTime(card.last))}</span>
-            </div>
-        </div>`;
-    },
-
-    cardHtml(card) {
-        const m = cardMeta(card.id);
-        const i = this.cards.findIndex(x => x.id === card.id);
-        const prev = i > 0 ? this.cards[i - 1] : null;
-        const next = i >= 0 && i < this.cards.length - 1 ? this.cards[i + 1] : null;
-        const cur = currentKey();
-        const isOpen = card.chats.some(c => c.key === cur);
-        const step = (d, x) => `<button class="cb_iconbtn cb_step" data-step="${d}"${x ? ` title="${esc(x.name)}"` : ' disabled'} aria-label="${d < 0 ? 'การ์ดก่อนหน้า' : 'การ์ดถัดไป'}"><i class="fa-solid fa-chevron-${d < 0 ? 'left' : 'right'}"></i></button>`;
-        const tagStyle = t => (t.color ? ` style="--tag-bg:${esc(t.color)};${t.color2 ? `--tag-fg:${esc(t.color2)};` : ''}"` : '');
-        // back / position / prev-next sit under the header, outside the scrolling list
-        this.root.querySelector('.cb_cardnav').innerHTML = `
-                <button class="cb_back" data-back="1"><i class="fa-solid fa-chevron-left"></i><span>การ์ดทั้งหมด</span></button>
-                <span class="cb_cardpos">${i >= 0 ? `${i + 1} / ${this.cards.length}` : ''}</span>
-                ${step(-1, prev)}${step(1, next)}`;
-        return `<div class="cb_card" data-cardpage="${esc(card.id)}">
-            <div class="cb_hero">
-                <img class="cb_herobg" src="${esc(m.thumb || m.collage?.[0]?.thumb || '')}" alt="" aria-hidden="true">
-                <button class="cb_heroimg" data-zoom="1" title="ดูรูปเต็ม" aria-label="ดูรูปเต็ม">${this.coverHtml(m, false)}</button>
-                <div class="cb_heroinfo">
-                    <h3>${m.fav ? '<i class="fa-solid fa-star cb_favstar" title="ตัวละครโปรด"></i>' : ''}${esc(card.name)}</h3>
-                    <div class="cb_herosub">
-                        ${creditHtml(m.creator, { icon: 'fa-solid fa-feather-pointed', title: 'ผู้สร้างการ์ด' })}
-                        ${creditHtml(m.version, { prefix: 'v', title: 'เวอร์ชันการ์ด', maxText: 16 })}
-                        <span><i class="fa-regular fa-comments"></i>${card.count} แชท</span>
-                        <span><i class="fa-regular fa-message"></i>${card.total.toLocaleString('th-TH')} ข้อความ</span>
-                        ${card.last ? `<span title="${esc(fullTime(card.last))}"><i class="fa-regular fa-clock"></i>${esc(relTime(card.last))}</span>` : ''}
-                    </div>
-                    ${m.members?.length ? `<div class="cb_members">${m.members.map(x => `<span title="${esc(x.name)}"><img src="${esc(x.thumb)}" alt="" loading="lazy">${esc(x.name)}</span>`).join('')}</div>` : ''}
-                    ${m.tags.length ? `<div class="cb_tags">${m.tags.map(t => `<button class="cb_tag" data-tag="${esc(t.name)}"${tagStyle(t)} title="ค้นหาการ์ดที่มีแท็กนี้">${esc(t.name)}</button>`).join('')}</div>` : ''}
-                    <button class="cb_btn cb_primary cb_continue" data-continue="${esc(card.head.key)}"><i class="fa-solid ${isOpen ? 'fa-eye' : 'fa-play'}"></i>${isOpen ? 'กลับไปที่แชท' : 'คุยต่อแชทล่าสุด'}</button>
-                </div>
-            </div>
-            ${m.note ? `<div class="cb_cnote${this.noteOpen ? ' cb_open' : ''}">
-                <div class="cb_cnotehead"><i class="fa-solid fa-quote-left"></i>Creator's note</div>
-                <div class="cb_cnotetext">${esc(m.note)}</div>
-                <button class="cb_notemore" data-note="1"${this.noteOpen ? '' : ' hidden'}>${this.noteOpen ? 'ย่อ<i class="fa-solid fa-chevron-up"></i>' : 'อ่านต่อ<i class="fa-solid fa-chevron-down"></i>'}</button>
-            </div>` : ''}
-            <div class="cb_cardchats"><i class="fa-regular fa-comments"></i>แชทของการ์ดนี้<span>${card.count}</span></div>
-            ${this.entries.length ? '' : '<div class="cb_empty"><i class="fa-regular fa-comments"></i><span>ไม่มีแชท</span></div>'}
-        </div>`;
-    },
-
-    /** Show "อ่านต่อ" only when the note is longer than its folded height. */
-    fitNote() {
-        const box = this.root?.querySelector('.cb_cnote');
-        if (!box || this.noteOpen) return;
-        requestAnimationFrame(() => {
-            const text = box.querySelector('.cb_cnotetext');
-            const more = box.querySelector('.cb_notemore');
-            if (text && more) more.hidden = text.scrollHeight <= text.clientHeight + 2;
-        });
-    },
-
-    /**
-     * Pictures load only near the screen, a few at a time, scaled to the tile (coverQueue),
-     * and are let go further away, so a long gallery stays light.
-     */
-    watchCovers() {
-        const list = this.root.querySelector('.cb_list');
-        this.imgObserver ??= new IntersectionObserver(es => {
-            for (const x of es) {
-                if (x.isIntersecting) {
-                    for (const t of x.target.querySelectorAll('img.cb_thumb[data-src]:not([src])')) t.src = t.dataset.src;
-                }
-                for (const img of x.target.querySelectorAll('img.cb_full')) {
-                    if (x.isIntersecting) showCover(img); else dropCover(img);
-                }
-            }
-        }, { root: list, rootMargin: '400px 0px' });
-        list.querySelectorAll('.cb_tile').forEach(t => this.imgObserver.observe(t));
-    },
-
     renderControls() {
         const r = this.root;
         const s = settings();
-        r.querySelectorAll('.cb_sort [data-sort]').forEach(b => b.classList.toggle('cb_on', b.dataset.sort === s.sort));
+        const gallery = s.view === 'gallery';
+        const sort = sortFor(s, gallery);
+        r.querySelectorAll('.cb_sort [data-sort]').forEach(b => {
+            b.classList.toggle('cb_on', b.dataset.sort === sort);
+            b.hidden = b.dataset.sort === (gallery ? 'character' : 'added');
+        });
+        // the gallery's select button picks cards for Bulk Manager: only there when it is installed
+        const sel = r.querySelector('.cb_selectbtn');
+        const cardsMode = gallery && !this.card;
+        sel.hidden = cardsMode && !bulkAvailable() && !this.selecting;
+        sel.title = cardsMode ? 'เลือกหลายการ์ด (ส่งต่อให้ Bulk Manager)' : 'เลือกหลายแชท';
         r.querySelectorAll('.cb_view [data-view]').forEach(b => b.classList.toggle('cb_on', b.dataset.view === s.view));
         const unread = totalUnread();
-        const groupsN = data.chats.filter(c => c.type === 'group').length;
+        const groupsN = gallery ? (ctx().groups || []).length : data.chats.filter(c => c.type === 'group').length;
         const pinsN = data.chats.filter(c => s.pins[c.key]).length;
         const cur = currentKey();
         const curChat = cur && data.byKey.get(cur);
@@ -990,14 +801,23 @@ const ui = {
             chip('all', 'ทั้งหมด', 0),
             chip('unread', 'มีข้อความใหม่', unread, 'fa-solid fa-circle'),
             chip('pinned', 'ปักหมุด', pinsN, 'fa-solid fa-thumbtack'),
-            groupsN ? chip('group', 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
+            gallery ? `<button class="cb_chip cb_toggle${s.galleryFav ? ' cb_on' : ''}" data-fav="1" title="เฉพาะตัวละครและกลุ่มที่ติดดาวไว้"><i class="fa-solid fa-star"></i>โปรด</button>` : '',
+            gallery ? `<button class="cb_chip rv_tagchip${s.galleryTags.length ? ' cb_on' : ''}" data-tags="1" aria-haspopup="dialog" title="กรองตามแท็ก"><i class="fa-solid fa-tags"></i><b>${s.galleryTags.length ? esc(s.galleryTags.length > 2 ? `${s.galleryTags.slice(0, 2).join(', ')} +${s.galleryTags.length - 2}` : s.galleryTags.join(', ')) : 'แท็ก'}</b>${s.galleryTags.length ? '<i class="fa-solid fa-xmark" data-cleartags="1"></i>' : '<i class="fa-solid fa-chevron-down cb_chipchev"></i>'}</button>` : '',
+            groupsN ? chip('group', gallery ? 'กลุ่ม' : 'แชทกลุ่ม', 0, 'fa-solid fa-users') : '',
             ent ? `<button class="cb_chip cb_on cb_entchip" data-entity="">${esc(ent.entityName)}<i class="fa-solid fa-xmark"></i></button>`
                 : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>${s.view === 'gallery' ? '' : 'เฉพาะ '}${esc(curChat.entityName)}</button>` : '',
             personas.length > 1 ? `<button class="cb_chip cb_personachip${this.persona ? ' cb_on' : ''}" data-personas="1" aria-haspopup="menu">${this.persona ? `<img src="${esc(thumb('persona', this.persona))}" alt="">` : '<i class="fa-solid fa-masks-theater"></i>'}<b>${esc(this.persona ? personas.find(([id]) => id === this.persona)?.[1] ?? this.persona : 'ทุก persona')}</b><i class="fa-solid fa-chevron-down cb_chipchev"></i></button>` : '',
             `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมภาคต่อ</button>`,
         ].join('');
         const shownChats = this.shownN;
-        r.querySelector('.cb_total').textContent = shownChats === data.chats.length || !data.chats.length ? `${data.chats.length}` : `${shownChats}/${data.chats.length}`;
+        r.querySelector('.cb_title b').textContent = gallery ? 'การ์ด' : 'แชท';
+        r.querySelector('.cb_title > i').className = gallery ? 'fa-solid fa-id-card' : 'fa-solid fa-comments';
+        if (gallery && !this.card) {
+            const all = galleryEntities().length;
+            r.querySelector('.cb_total').textContent = this.cards.length === all ? `${all}` : `${this.cards.length}/${all}`;
+        } else {
+            r.querySelector('.cb_total').textContent = shownChats === data.chats.length || !data.chats.length ? `${data.chats.length}` : `${shownChats}/${data.chats.length}`;
+        }
         this.renderSync();
     },
 
@@ -1021,16 +841,28 @@ const ui = {
         r.querySelector('.cb_clean').title = !synced ? 'ใช้ได้เมื่อเปิดซิงค์แชทระหว่างเครื่องใน Chat Auto Backup แล้ว (กดซิงค์อย่างน้อยหนึ่งครั้ง)' : 'ทำให้ Dropbox และทุกเครื่องมีแชทเหมือนเครื่องนี้เป๊ะ';
     },
 
+    /** What select mode picks here: cards on the gallery grid (for Bulk Manager), chats everywhere else. */
+    selectsCards() {
+        return settings().view === 'gallery' && !this.card;
+    },
+
     renderSelbar() {
         const bar = this.root?.querySelector('.cb_selbar');
         if (!bar) return;
         bar.hidden = !this.selecting;
         if (!this.selecting) return;
-        const n = this.selected.size;
-        bar.querySelector('.cb_selcount').textContent = n ? `เลือก ${n} แชท` : 'แตะแชทเพื่อเลือก';
-        bar.querySelectorAll('[data-bulk]').forEach(b => b.classList.toggle('cb_disabled', !n));
+        const cards = this.selectsCards();
+        bar.classList.toggle('rv_cardsel', cards);
+        const n = cards ? this.selCards.size : this.selected.size;
+        bar.querySelector('.cb_selcount').textContent = cards ? (n ? `${n} การ์ด` : 'แตะเลือกการ์ด') : (n ? `เลือก ${n} แชท` : 'แตะแชทเพื่อเลือก');
+        bar.querySelectorAll('[data-bulk]').forEach(b => {
+            const forCards = b.hasAttribute('data-cards');
+            b.hidden = b.dataset.bulk !== 'done' && forCards !== cards;
+            b.classList.toggle('cb_disabled', b.dataset.bulk !== 'done' && !n);
+        });
     },
-};
+});
+Object.assign(ui, galleryUi);
 
 let linkInfo = new Map(); // key → story info, refreshed with every render
 const _render = ui.render.bind(ui);
@@ -1041,246 +873,6 @@ ui.render = function () {
 
 function chatFromRow(row) {
     return row ? data.byKey.get(row.dataset.key) : null;
-}
-
-// ---------------------------------------------------------------- gallery cards
-
-const fullAvatar = file => `/characters/${encodeURIComponent(file)}`;
-
-// ---------------------------------------------------------------- gallery covers
-//
-// A card picture is a PNG of a few MB, around 4 MB once decoded. Showing dozens of them at
-// full size at once runs an app's WebView out of memory (Tauri and phone apps restart),
-// even where a desktop browser copes. So the gallery decodes a few at a time, keeps a
-// copy scaled to the tile, and lets the big picture go.
-
-const COVER_JOBS = 3;    // pictures decoding at the same time
-const COVER_KEEP = 240;  // scaled copies kept for scrolling back
-const coverCache = new Map(); // "url|w|h" → object URL of the scaled copy (or the url itself)
-const coverQueue = [];
-const coverWanted = new WeakSet(); // <img>s near the screen
-let coverRunning = 0;
-
-/** The tile's size in device pixels, rounded so one copy serves tiles of nearly the same size. */
-function coverBox(img) {
-    const box = img.parentElement;
-    const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
-    const step = v => Math.max(80, Math.ceil(v * dpr / 40) * 40);
-    return { w: step(box?.clientWidth || 160), h: step(box?.clientHeight || 240) };
-}
-
-function showCover(img) {
-    const url = img.dataset.src;
-    if (!url || img.hasAttribute('src')) return;
-    coverWanted.add(img);
-    const { w, h } = coverBox(img);
-    const hit = coverCache.get(`${url}|${w}|${h}`);
-    if (hit) { img.src = hit; return; }
-    if (!coverQueue.some(j => j.img === img)) coverQueue.push({ img, url, w, h });
-    pumpCovers();
-}
-
-function dropCover(img) {
-    coverWanted.delete(img);
-    const i = coverQueue.findIndex(j => j.img === img);
-    if (i >= 0) coverQueue.splice(i, 1);
-    if (img.hasAttribute('src')) { img.removeAttribute('src'); img.classList.remove('cb_loaded'); }
-    img.previousElementSibling?.classList.remove('cb_under');
-}
-
-function pumpCovers() {
-    while (coverRunning < COVER_JOBS && coverQueue.length) {
-        const job = coverQueue.shift();
-        if (!job.img.isConnected || !coverWanted.has(job.img)) continue;
-        coverRunning++;
-        scaledCover(job.url, job.w, job.h)
-            .then(src => { if (job.img.isConnected && coverWanted.has(job.img) && !job.img.hasAttribute('src')) job.img.src = src; })
-            .catch(() => {})
-            .finally(() => { coverRunning--; pumpCovers(); });
-    }
-}
-
-async function scaledCover(url, w, h) {
-    const key = `${url}|${w}|${h}`;
-    if (coverCache.has(key)) return coverCache.get(key);
-    let out = url;
-    const big = new Image();
-    try {
-        big.decoding = 'async';
-        big.src = url;
-        await big.decode();
-        const nw = big.naturalWidth, nh = big.naturalHeight;
-        const k = Math.max(w / nw, h / nh); // fill the tile, as object-fit: cover does
-        if (nw && nh && k < 0.8) {
-            const c = document.createElement('canvas');
-            c.width = Math.round(nw * k);
-            c.height = Math.round(nh * k);
-            const g = c.getContext('2d');
-            g.imageSmoothingQuality = 'high';
-            g.drawImage(big, 0, 0, c.width, c.height);
-            const blob = await new Promise(r => c.toBlob(r, 'image/webp', 0.9));
-            c.width = c.height = 0;
-            if (blob) out = URL.createObjectURL(blob);
-        }
-    } catch { /* could not decode, or another site's picture: show it as it is */ }
-    big.removeAttribute('src'); // let the big decoded picture go
-    coverCache.set(key, out);
-    if (coverCache.size > COVER_KEEP) {
-        for (const [k, v] of coverCache) {
-            if (coverCache.size <= COVER_KEEP) break;
-            if (v.startsWith('blob:') && document.querySelector(`img[src="${CSS.escape(v)}"]`)) continue; // on screen
-            coverCache.delete(k);
-            if (v.startsWith('blob:')) URL.revokeObjectURL(v);
-        }
-    }
-    return out;
-}
-
-function tagsOf(entity, ch) {
-    const c = ctx();
-    const own = (c.tagMap?.[entity] || []).map(id => (c.tags || []).find(t => t.id === id)).filter(t => t?.name);
-    if (own.length) return own.map(t => ({ name: String(t.name), color: t.color || '', color2: t.color2 || '' }));
-    // tags written in the card itself, when SillyTavern's own tags were not imported
-    const raw = ch?.data?.tags ?? ch?.tags;
-    return Array.isArray(raw) ? [...new Set(raw.map(String).map(x => x.trim()).filter(Boolean))].slice(0, 30).map(name => ({ name })) : [];
-}
-
-/** What the gallery shows of a character or group: pictures, tags, creator and creator's note. */
-function cardMeta(id) {
-    const bar = id.indexOf('|');
-    const type = id.slice(0, bar), entity = id.slice(bar + 1);
-    if (type === 'group') {
-        const g = groupOf(entity);
-        const members = (g?.members || []).map(a => charOf(a)).filter(Boolean);
-        const url = g?.avatar_url;
-        const own = url && /^(data:|https?:|\/)/.test(url) ? url : '';
-        return {
-            type, entity,
-            full: own, thumb: own,
-            collage: own ? null : members.slice(0, 4).map(ch => ({ full: fullAvatar(ch.avatar), thumb: thumb('avatar', ch.avatar) })),
-            members: members.map(ch => ({ name: ch.name, thumb: thumb('avatar', ch.avatar) })),
-            tags: tagsOf(entity, null),
-            creator: '', version: '', note: '', fav: g?.fav === true || g?.fav === 'true',
-        };
-    }
-    const ch = charOf(entity);
-    const d = ch?.data || {};
-    return {
-        type, entity,
-        full: fullAvatar(entity), thumb: thumb('avatar', entity),
-        collage: null, members: null,
-        tags: tagsOf(entity, ch),
-        creator: String(d.creator ?? '').trim(),
-        version: String(d.character_version ?? '').trim(),
-        note: noteText(d.creator_notes || ch?.creatorcomment || '', { char: ch?.name, user: ctx().name1 }),
-        fav: ch?.fav === true || ch?.fav === 'true',
-    };
-}
-
-/**
- * Creator / version as cards write them: a name, or links to where the card came from.
- * Links become short chips (site and first folder); long plain text is cut.
- */
-function creditHtml(value, { icon = '', prefix = '', title = '', maxText = 40 } = {}) {
-    const raw = String(value ?? '').trim();
-    if (!raw) return '';
-    const links = [];
-    const text = raw
-        .replace(/https?:\/\/[^\s<>"']+/gi, url => {
-            const tail = url.match(/[).,;:!?\]]+$/)?.[0] ?? '';
-            links.push(url.slice(0, url.length - tail.length));
-            return ' ';
-        })
-        .replace(/[([]\s*[)\]]|[([]\s*$/g, ' ')   // brackets left empty by the links
-        .replace(/\s+/g, ' ').trim();
-    const out = [];
-    if (text && text.length <= maxText) out.push(`<span title="${esc(title)}">${icon ? `<i class="${icon}"></i>` : ''}${esc(prefix)}${esc(text)}</span>`);
-    for (const url of links.slice(0, 3)) {
-        let label = url;
-        try {
-            const u = new URL(url);
-            const dir = u.pathname.split('/').filter(Boolean)[0];
-            label = `${u.hostname.replace(/^www\./, '')}${dir ? `/${dir}` : ''}`;
-        } catch { continue; }
-        out.push(`<a class="cb_link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}: ${esc(url)}">${icon && !out.length ? `<i class="${icon}"></i>` : '<i class="fa-solid fa-link"></i>'}${esc(label)}</a>`);
-    }
-    return out.join('');
-}
-
-/** Tags and creator, so the gallery search finds cards by them too. */
-function cardSearchText(id) {
-    const m = cardMeta(id);
-    return `${m.tags.map(t => t.name).join('\n')}\n${m.creator}`;
-}
-
-function openCard(id) {
-    const list = ui.root?.querySelector('.cb_list');
-    if (!list || !id) return;
-    if (!ui.card) ui.gridTop = list.scrollTop;
-    ui.card = id;
-    ui.noteOpen = false;
-    ui.render();
-    list.scrollTop = 0;
-    list.querySelector('.cb_card')?.classList.add('cb_enter');
-}
-
-function closeCard() {
-    const list = ui.root?.querySelector('.cb_list');
-    if (!list || !ui.card) return;
-    const from = ui.card;
-    ui.card = null;
-    ui.render();
-    list.scrollTop = ui.gridTop;
-    const tile = list.querySelector(`.cb_tile[data-card="${CSS.escape(from)}"]`);
-    if (tile) { tile.classList.add('cb_back_here'); tile.focus({ preventScroll: true }); }
-}
-
-/** Big covers or small ones; the card at the top of the screen stays at the top. */
-function setGallerySize(size) {
-    const s = settings();
-    if (s.gallerySize === size) return;
-    const list = ui.root.querySelector('.cb_list');
-    const top = list.getBoundingClientRect().top;
-    const first = [...list.querySelectorAll('.cb_tile')].find(t => t.getBoundingClientRect().bottom > top + 8);
-    const atTop = list.scrollTop < 40;
-    s.gallerySize = size;
-    saveSettings();
-    ui.animate = atTop;
-    ui.render();
-    const again = first && list.querySelector(`.cb_tile[data-card="${CSS.escape(first.dataset.card)}"]`);
-    if (atTop || !again) list.scrollTop = 0;
-    else list.scrollTop += again.getBoundingClientRect().top - list.getBoundingClientRect().top - 8;
-}
-
-/** Next or previous card on the grid's order (buttons, arrow keys, swiping sideways). */
-function stepCard(d) {
-    const i = ui.cards.findIndex(x => x.id === ui.card);
-    const next = i < 0 ? null : ui.cards[i + d];
-    if (!next) return;
-    const list = ui.root.querySelector('.cb_list');
-    ui.card = next.id;
-    ui.noteOpen = false;
-    ui.render();
-    list.scrollTop = 0;
-    list.querySelector('.cb_card')?.classList.add(d > 0 ? 'cb_from_r' : 'cb_from_l');
-}
-
-/** The cover full screen; any tap closes it. */
-function zoomCover(id) {
-    const m = cardMeta(id);
-    const urls = m.collage?.length ? m.collage.map(x => x.full) : [m.full];
-    if (!urls[0]) return;
-    const layer = ui.root.querySelector('.cb_layer');
-    const el = document.createElement('div');
-    el.className = 'cb_lightbox';
-    el.setAttribute('role', 'dialog');
-    el.innerHTML = `<div class="cb_lbimgs" data-n="${urls.length}">${urls.map(u => `<img src="${esc(u)}" alt="">`).join('')}</div>
-        <button class="cb_iconbtn cb_lbx" aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button>`;
-    const close = () => { el.classList.add('cb_out'); setTimeout(() => el.remove(), 160); };
-    el._close = close;
-    el.addEventListener('click', close);
-    layer.append(el);
-    requestAnimationFrame(() => el.classList.add('cb_in'));
 }
 
 // theme colours, or a light / dark look that ignores the theme
@@ -1316,7 +908,7 @@ function diag(msg) {
 function reportError(where, err) {
     console.error(LOG, where, err);
     diag(`ERROR ${where}: ${err?.stack || err}`);
-    try { globalThis.toastr?.error(`${where}: ${err?.message ?? err}`, 'Chat Browser', { timeOut: 15000, extendedTimeOut: 15000 }); } catch { /* ignore */ }
+    try { globalThis.toastr?.error(`${where}: ${err?.message ?? err}`, 'Reverie', { timeOut: 15000, extendedTimeOut: 15000 }); } catch { /* ignore */ }
 }
 
 window.addEventListener('error', e => {
@@ -1400,7 +992,7 @@ function openBrowser() {
     root.className = 'cb_root';
     root.innerHTML = `
         <div class="cb_backdrop"></div>
-        <section class="cb_panel" role="dialog" aria-modal="true" aria-label="Chat Browser">
+        <section class="cb_panel" role="dialog" aria-modal="true" aria-label="Reverie">
             <header class="cb_head">
                 <div class="cb_titlebar">
                     <div class="cb_title"><i class="fa-solid fa-comments"></i><b>แชท</b><span class="cb_total"></span><i class="fa-solid fa-circle-notch fa-spin cb_spin" hidden></i></div>
@@ -1433,6 +1025,9 @@ function openBrowser() {
                 <button data-bulk="unpin">เลิกปัก</button>
                 <button data-bulk="read"><i class="fa-solid fa-check-double"></i>อ่านแล้ว</button>
                 <button data-bulk="delete" class="cb_danger"><i class="fa-solid fa-trash"></i>ลบ</button>
+                <button data-bulk="cdelete" data-cards class="cb_danger" title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-trash"></i>ลบ</button>
+                <button data-bulk="cbackup" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-box-archive"></i>สำรอง</button>
+                <button data-bulk="ccopy" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-clone"></i>คัดลอก</button>
                 <button data-bulk="done">เสร็จ</button>
             </footer>
             <div class="cb_layer"></div>
@@ -1448,7 +1043,7 @@ function openBrowser() {
         wireBrowser(root);
         ui.render();
     } catch (err) {
-        reportError('วาด Chat Browser ไม่ได้', err);
+        reportError('วาด Reverie ไม่ได้', err);
     }
     if (!matchMedia('(pointer: coarse)').matches) root.querySelector('.cb_search').focus();
     reload();
@@ -1458,6 +1053,7 @@ function closeBrowser() {
     const root = ui.root;
     if (!root) return;
     diag(`close ${Date.now() - (ui.openedAt || 0)}ms หลังเปิด · ${(new Error().stack || '').split('\n').slice(1, 4).map(x => x.trim()).join(' < ')}`);
+    closeEditor();      // its unsaved edits stay as a draft
     ui.root = null;
     ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
@@ -1530,8 +1126,10 @@ function wireBrowser(root) {
     const clearq = root.querySelector('.cb_clearq');
 
     // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
-    root.querySelector('.cb_backdrop').addEventListener('click', () => { if (Date.now() - (ui.openedAt || 0) > 450) closeBrowser(); });
-    root.querySelector('.cb_closebtn').addEventListener('click', closeBrowser);
+    // with the card editor open, unsaved edits are asked about first
+    const tryClose = async () => { if (editorOpen() && !(await closeEditorGuarded())) return; closeBrowser(); };
+    root.querySelector('.cb_backdrop').addEventListener('click', () => { if (Date.now() - (ui.openedAt || 0) > 450) tryClose(); });
+    root.querySelector('.cb_closebtn').addEventListener('click', tryClose);
 
     let qTimer = null;
     search.addEventListener('input', () => {
@@ -1561,6 +1159,7 @@ function wireBrowser(root) {
         const b = e.target.closest('[data-view]');
         if (!b || b.dataset.view === s.view) return;
         const toGallery = b.dataset.view === 'gallery' || s.view === 'gallery';
+        if (ui.selecting) { ui.selecting = false; ui.selected.clear(); ui.selCards.clear(); root.querySelector('.cb_selectbtn').classList.remove('cb_on'); }
         s.view = b.dataset.view; saveSettings(); ui.card = null; ui.animate = true; ui.render();
         if (toGallery) list.scrollTop = 0;
     });
@@ -1568,6 +1167,12 @@ function wireBrowser(root) {
         const b = e.target.closest('button');
         if (!b) return;
         if (b.dataset.personas) { openPersonaMenu(b); return; }
+        if (b.dataset.tags) {
+            if (e.target.closest('[data-cleartags]')) { s.galleryTags = []; saveSettings(); ui.card = null; ui.render(); list.scrollTop = 0; return; }
+            pickTags();
+            return;
+        }
+        if (b.dataset.fav) { s.galleryFav = !s.galleryFav; saveSettings(); ui.card = null; ui.animate = true; ui.render(); list.scrollTop = 0; return; }
         // in the gallery, the current character's chip goes straight to its card
         if (s.view === 'gallery' && b.dataset.entity) { openCard(b.dataset.entity); return; }
         if (b.dataset.filter) ui.filter = ui.filter === b.dataset.filter && b.dataset.filter !== 'all' ? 'all' : b.dataset.filter;
@@ -1596,10 +1201,24 @@ function wireBrowser(root) {
         if (b && !b.classList.contains('cb_disabled')) bulk(b.dataset.bulk);
     });
 
+    // A long press ends with a click on the same spot: that one click must not undo what the press did.
+    let skipClick = false;
+    list.addEventListener('click', e => {
+        if (!skipClick) return;
+        skipClick = false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }, true);
+
     list.addEventListener('click', async e => {
         const t = e.target;
+        if (t.closest('[data-clearfilters]')) { s.galleryTags = []; s.galleryFav = false; saveSettings(); ui.render(); return; }
         const tile = t.closest('.cb_tile');
-        if (tile) { openCard(tile.dataset.card); return; }
+        if (tile) {
+            if (ui.selecting && ui.selectsCards()) toggleSelectCard(tile.dataset.card);
+            else openCard(tile.dataset.card);
+            return;
+        }
         const gsize = t.closest('[data-gsize]');
         if (gsize) { setGallerySize(gsize.dataset.gsize); return; }
         const card = t.closest('[data-cardpage]');
@@ -1608,6 +1227,8 @@ function wireBrowser(root) {
             if (t.closest('[data-zoom]')) zoomCover(id);
             else if (t.closest('[data-tag]')) searchFor(t.closest('[data-tag]').dataset.tag);
             else if (t.closest('[data-continue]')) doOpen(data.byKey.get(t.closest('[data-continue]').dataset.continue));
+            else if (t.closest('[data-newchat]')) startNewChat(id);
+            else if (t.closest('[data-edit]')) openEditor(id.slice(id.indexOf('|') + 1));
             else if (t.closest('[data-note]')) {
                 ui.noteOpen = !ui.noteOpen;
                 const box = card.querySelector('.cb_cnote');
@@ -1641,14 +1262,22 @@ function wireBrowser(root) {
         doOpen(c);
     });
 
-    // Long press on a row starts selecting (touch).
-    let pressTimer = null, pressKey = null;
+    // Long press on a row (or, with Bulk Manager installed, a gallery card) starts selecting (touch).
+    let pressTimer = null;
     list.addEventListener('pointerdown', e => {
+        skipClick = false;
         if (e.pointerType !== 'touch' || ui.selecting) return;
         const row = e.target.closest('.cb_row');
-        if (!row || e.target.closest('button')) return;
-        pressKey = row.dataset.key;
-        pressTimer = setTimeout(() => { pressTimer = null; setSelecting(true); toggleSelect(pressKey); navigator.vibrate?.(15); }, 550);
+        const tile = !row && ui.selectsCards() && bulkAvailable() ? e.target.closest('.cb_tile') : null;
+        if ((!row && !tile) || e.target.closest('button')) return;
+        const key = row ? row.dataset.key : tile.dataset.card;
+        pressTimer = setTimeout(() => {
+            pressTimer = null;
+            skipClick = true;
+            setSelecting(true);
+            if (row) toggleSelect(key); else toggleSelectCard(key);
+            navigator.vibrate?.(15);
+        }, 550);
     });
     const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
 
@@ -1741,7 +1370,11 @@ function wireBrowser(root) {
                 if (first) doOpen(chatFromRow(first));
                 return;
             }
-            if (e.target.matches?.('.cb_tile')) { e.preventDefault(); openCard(e.target.dataset.card); return; }
+            if (e.target.matches?.('.cb_tile')) {
+                e.preventDefault();
+                if (ui.selecting && ui.selectsCards()) toggleSelectCard(e.target.dataset.card); else openCard(e.target.dataset.card);
+                return;
+            }
             const row = e.target.closest?.('.cb_row');
             if (row && e.target === row) { e.preventDefault(); ui.selecting ? toggleSelect(row.dataset.key) : doOpen(chatFromRow(row)); }
             const sec = e.target.closest?.('.cb_section.cb_foldable');
@@ -1763,7 +1396,7 @@ async function doOpen(c) {
 
 function setSelecting(on) {
     ui.selecting = on;
-    if (!on) ui.selected.clear();
+    if (!on) { ui.selected.clear(); ui.selCards.clear(); }
     ui.root?.querySelector('.cb_selectbtn')?.classList.toggle('cb_on', on);
     ui.render();
 }
@@ -1774,7 +1407,21 @@ function toggleSelect(key) {
     ui.renderSelbar();
 }
 
+/** Gallery: pick a card for Bulk Manager (characters only — groups are not in Bulk Manager's characters tab). */
+function toggleSelectCard(id) {
+    if (!id.startsWith('character|')) { toast.info('ส่งต่อให้ Bulk Manager ได้เฉพาะตัวละคร (ยังไม่รองรับกลุ่ม)'); return; }
+    if (ui.selCards.has(id)) ui.selCards.delete(id); else ui.selCards.add(id);
+    ui.root?.querySelector(`.cb_tile[data-card="${CSS.escape(id)}"]`)?.classList.toggle('cb_selected', ui.selCards.has(id));
+    ui.renderSelbar();
+}
+
 async function bulk(action) {
+    if (action.startsWith('c')) {
+        const avatars = [...ui.selCards].filter(id => id.startsWith('character|')).map(id => id.slice('character|'.length));
+        if (!avatars.length) return;
+        await handOffToBulk(avatars, { cdelete: 'delete', cbackup: 'backup', ccopy: 'copy' }[action]);
+        return;
+    }
     const list = [...ui.selected].map(k => data.byKey.get(k)).filter(Boolean);
     if (action === 'done') { setSelecting(false); return; }
     if (!list.length) return;
@@ -2101,84 +1748,6 @@ async function openExport(c) {
                 e => { state.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i>อ่านแชทไม่สำเร็จ: ${esc(errText(e))}`; state.classList.add('cb_warn'); },
             );
         },
-    });
-}
-
-// ---------------------------------------------------------------- sheets (small dialogs inside the panel)
-
-function sheet({ title, body, buttons, wide = false, typing = false, onMount }) {
-    return new Promise(resolve => {
-        const layer = ui.root.querySelector('.cb_layer');
-        const el = document.createElement('div');
-        // a sheet you type into sits at the top, where the on-screen keyboard never covers it
-        el.className = `cb_sheetwrap${typing ? ' cb_typing' : ''}`;
-        el.innerHTML = `<div class="cb_sheet${wide ? ' cb_wide' : ''}" role="dialog" aria-modal="true">
-            <div class="cb_sheethead"><b>${esc(title)}</b><button class="cb_iconbtn" data-x aria-label="ปิด"><i class="fa-solid fa-xmark"></i></button></div>
-            <div class="cb_sheetbody">${body}</div>
-            <div class="cb_sheetfoot"></div>
-        </div>`;
-        layer.append(el);
-        const close = v => { el.classList.add('cb_out'); setTimeout(() => el.remove(), 150); resolve(v); };
-        el._close = () => close(null);
-        el.addEventListener('click', e => { if (e.target === el || e.target.closest('[data-x]')) close(null); });
-        const api = {
-            el, close,
-            body: el.querySelector('.cb_sheetbody'),
-            setButtons(list) {
-                const foot = el.querySelector('.cb_sheetfoot');
-                foot.replaceChildren(...list.map(b => {
-                    const btn = document.createElement('button');
-                    btn.className = `cb_btn${b.primary ? ' cb_primary' : ''}${b.danger ? ' cb_dangerbtn' : ''}`;
-                    btn.innerHTML = b.label;
-                    if (b.disabled) btn.disabled = true;
-                    btn.addEventListener('click', () => b.run(api, btn));
-                    return btn;
-                }));
-            },
-            setTitle(t) { el.querySelector('.cb_sheethead b').textContent = t; },
-        };
-        api.setButtons(buttons ?? []);
-        onMount?.(api);
-        requestAnimationFrame(() => el.classList.add('cb_in'));
-    });
-}
-
-function sheetConfirm({ title, body, ok = 'ตกลง', danger = false }) {
-    return sheet({
-        title, body,
-        buttons: [
-            { label: 'ยกเลิก', run: a => a.close(false) },
-            { label: esc(ok), primary: !danger, danger, run: a => a.close(true) },
-        ],
-    });
-}
-
-function sheetPrompt({ title, value = '', ok = 'ตกลง', hint = '' }) {
-    return sheet({
-        title,
-        typing: true,
-        body: `<input class="cb_input" type="text" value="${esc(value)}" spellcheck="false" autocomplete="off">${hint ? `<p class="cb_note">${hint}</p>` : ''}`,
-        buttons: [
-            { label: 'ยกเลิก', run: a => a.close(null) },
-            { label: esc(ok), primary: true, run: a => a.close(a.body.querySelector('input').value) },
-        ],
-        onMount: a => {
-            const input = a.body.querySelector('input');
-            setTimeout(() => { input.focus({ preventScroll: true }); input.select(); }, 50);
-            input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); a.close(input.value); } });
-        },
-    });
-}
-
-function sheetPick({ title, hint, items }) {
-    return sheet({
-        title,
-        body: `${hint ? `<p class="cb_note">${hint}</p>` : ''}<div class="cb_picklist">${items.map((x, i) => `<button class="cb_pick${x.selected ? ' cb_on' : ''}" data-i="${i}">${x.html}</button>`).join('')}</div>`,
-        buttons: [{ label: 'ยกเลิก', run: a => a.close(null) }],
-        onMount: a => a.body.addEventListener('click', e => {
-            const b = e.target.closest('[data-i]');
-            if (b) a.close(items[Number(b.dataset.i)].value);
-        }),
     });
 }
 
@@ -2519,7 +2088,6 @@ function updateLauncherBadge() {
     if (btn) btn.dataset.unread = n ? '1' : '';
 }
 
-function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
 /** The part of the page that is actually on screen: it shrinks (and may scroll) when the keyboard opens. */
 function visibleArea() {
@@ -2562,7 +2130,7 @@ function renderLauncher() {
     el.className = 'cb_launch';
     el.setAttribute('role', 'button');
     el.tabIndex = 0;
-    el.title = 'Chat Browser — แชททั้งหมด';
+    el.title = 'Reverie — แชทและการ์ดทั้งหมด';
     applyLook(el);
     document.body.append(el);
     el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrowser(); } });
@@ -2671,7 +2239,7 @@ function renderTopbar() {
     el = document.createElement('div');
     el.id = 'cb_topbar';
     el.className = 'drawer';
-    el.innerHTML = '<div class="drawer-toggle-cb"><div class="cb_ticon" title="Chat Browser — แชททั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
+    el.innerHTML = '<div class="drawer-toggle-cb"><div class="cb_ticon" title="Reverie — แชทและการ์ดทั้งหมด" tabindex="0"></div><span class="cb_launch_badge" hidden></span></div>';
     const before = document.getElementById('rightNavHolder');
     if (before?.parentElement === holder) holder.insertBefore(el, before); else holder.append(el);
     el.addEventListener('click', e => { e.stopPropagation(); openBrowser(); });
@@ -2686,7 +2254,7 @@ function addWandItem() {
     item.id = 'cb_wand';
     item.className = 'list-group-item flex-container flexGap5 interactable';
     item.tabIndex = 0;
-    item.innerHTML = '<div class="fa-solid fa-comments extensionsMenuExtensionButton"></div><span>Chat Browser</span>';
+    item.innerHTML = '<div class="fa-solid fa-comments extensionsMenuExtensionButton"></div><span>Reverie</span>';
     item.addEventListener('click', () => openBrowser());
     menu.append(item);
 }
@@ -2699,11 +2267,11 @@ function renderSettingsPanel() {
     <div id="cb_settings" class="cb_settings">
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>Chat Browser <small class="cb_version">v${VERSION}</small></b>
+                <b>Reverie <small class="cb_version">v${VERSION}</small></b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Chat Browser</div></div>
+                <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Reverie</div></div>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_launcher"> ปุ่มลอยบนจอ (ลากไปวางตรงไหนก็ได้ หรือเก็บเข้า Quick Dock)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_topbar"> ไอคอนบนแถบด้านบน</label>
                 <details class="cb_look">
@@ -2717,13 +2285,13 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
-                    <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Chat Browser แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
+                    <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Reverie แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
                 </div>
                 <div id="cb_diagbox" class="cb_diagbox" hidden>
                     <textarea class="text_pole" readonly rows="10"></textarea>
                     <div id="cb_diagcopy" class="menu_button"><i class="fa-solid fa-copy"></i> คัดลอกรายงาน</div>
                 </div>
-                <small class="cb_setnote">เปิดได้จากปุ่มลอย ไอคอนบนแถบด้านบน เมนูไม้กายสิทธิ์ (Extensions) หรือคำสั่ง <code>/chats</code> · จำนวนข้อความใหม่นับแยกในแต่ละเครื่อง · ปุ่ม Sync และ Clean Sync ใช้ Chat Auto Backup ที่เชื่อมต่อ Dropbox ไว้</small>
+                <small class="cb_setnote">เปิดได้จากปุ่มลอย ไอคอนบนแถบด้านบน เมนูไม้กายสิทธิ์ (Extensions) หรือคำสั่ง <code>/chats</code> (<code>/reverie</code>) · จำนวนข้อความใหม่นับแยกในแต่ละเครื่อง · ปุ่ม Sync และ Clean Sync ใช้ Chat Auto Backup ที่เชื่อมต่อ Dropbox ไว้</small>
             </div>
         </div>
     </div>`);
@@ -3021,16 +2589,18 @@ function registerCommand() {
         if (c.SlashCommandParser?.addCommandObject && c.SlashCommand?.fromProps) {
             c.SlashCommandParser.addCommandObject(c.SlashCommand.fromProps({
                 name: 'chats',
+                aliases: ['reverie'],
                 callback: () => { openBrowser(); return ''; },
-                helpString: 'เปิด Chat Browser — แชททั้งหมดของทุกตัวละครและกลุ่ม',
+                helpString: 'เปิด Reverie — แชทและการ์ดทั้งหมดของทุกตัวละครและกลุ่ม (/reverie ก็ได้)',
             }));
             c.SlashCommandParser.addCommandObject(c.SlashCommand.fromProps({
                 name: 'chats-debug',
+                aliases: ['reverie-debug'],
                 callback: async () => runDiagnostics(),
-                helpString: 'ตรวจปัญหา Chat Browser แล้วคืนรายงาน (ดูหรือคัดลอกได้จาก Extensions → Chat Browser → ตรวจปัญหา)',
+                helpString: 'ตรวจปัญหา Reverie แล้วคืนรายงาน (ดูหรือคัดลอกได้จาก Extensions → Reverie → ตรวจปัญหา)',
             }));
         } else {
-            c.registerSlashCommand?.('chats', () => { openBrowser(); return ''; }, [], 'เปิด Chat Browser', true, true);
+            c.registerSlashCommand?.('chats', () => { openBrowser(); return ''; }, ['reverie'], 'เปิด Reverie', true, true);
         }
     } catch (e) { console.warn(LOG, 'slash command', e); }
 }
@@ -3085,10 +2655,10 @@ async function checkForNewVersion() {
         const res = await fetch(new URL('manifest.json', BASE_URL), { cache: 'no-store' });
         const remote = String((await res.json())?.version ?? '');
         if (!remote || remote === VERSION) return;
-        globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Chat Browser', {
+        globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Reverie', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
@@ -3101,7 +2671,7 @@ async function init() {
     try {
         palette = installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } });
         palette.onChange(() => document.querySelectorAll('.cb_launch').forEach(el => applyLook(el)));
-    } catch (err) { console.warn('[Chat Browser] theme palette', err); }
+    } catch (err) { console.warn(LOG, 'theme palette', err); }
     settings();
     renderSettingsPanel();
     renderLauncher();
@@ -3116,6 +2686,11 @@ async function init() {
     console.log(LOG, 'loaded', VERSION);
 }
 
-globalThis.ChatBrowser = { open: openBrowser, close: closeBrowser, reload, data, VERSION };
+// what gallery.js and editor.js call back into
+Object.assign(app, { closeBrowser, doOpen, reload });
+
+const publicApi = { open: openBrowser, close: closeBrowser, reload, data, VERSION, openEditor: avatar => { openBrowser(); return openEditor(avatar); } };
+globalThis.Reverie = publicApi;
+globalThis.ChatBrowser = publicApi; // the old name, for anything that already calls it
 
 if (typeof jQuery === 'function') jQuery(init); else init();
