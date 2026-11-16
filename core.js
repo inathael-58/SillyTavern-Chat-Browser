@@ -2,8 +2,10 @@
  * Reverie — shared state and helpers used by every part (list, gallery, card editor).
  */
 
+import { isAvatarUrl, withVersion, versionOf } from './lib.js';
+
 export const MODULE = 'chat_browser';
-export const VERSION = '2.1.0'; // keep in sync with manifest.json
+export const VERSION = '2.2.0'; // keep in sync with manifest.json
 export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
@@ -75,7 +77,61 @@ export function charIndex(avatar) { return (ctx().characters || []).findIndex(c 
 export function groupOf(id) { return (ctx().groups || []).find(g => String(g.id) === String(id)); }
 
 export function thumb(type, file) {
-    try { return ctx().getThumbnailUrl(type, file); } catch { return ''; }
+    let url;
+    try { url = ctx().getThumbnailUrl(type, file); } catch { return ''; }
+    return type === 'avatar' ? withVersion(url, avatarVersions.get(file)) : url;
+}
+
+/** A character's full card picture. */
+export const fullAvatar = file => withVersion(`/characters/${encodeURIComponent(file)}`, avatarVersions.get(file));
+
+// ---------------------------------------------------------------- a changed card picture, shown everywhere
+//
+// SillyTavern serves a card picture at the same URL after it changes, and the browser keeps
+// showing the copy it already has (iPhone Safari above all) — the picture "doesn't change".
+// After a change: the browser's cached copies are fetched again, and every <img> of that card on
+// the page — Reverie's, SillyTavern's and other extensions' — gets the URL with ?rv=<version>.
+// Pictures drawn later in this session (SillyTavern redrawing its list or chat) get it too.
+
+const avatarVersions = new Map(); // avatar file → version (this page session)
+let avatarObserver = null;
+
+function versionImg(img) {
+    if (!avatarVersions.size || img.tagName !== 'IMG') return;
+    const src = img.getAttribute('src');
+    if (!src || src.startsWith('data:') || src.startsWith('blob:')) return;
+    for (const [avatar, v] of avatarVersions) {
+        if (isAvatarUrl(src, avatar, location.href)) {
+            if (versionOf(src) !== String(v)) img.setAttribute('src', withVersion(src, v));
+            return;
+        }
+    }
+}
+
+function watchAvatars() {
+    if (avatarObserver || typeof MutationObserver !== 'function') return;
+    avatarObserver = new MutationObserver(list => {
+        for (const m of list) {
+            if (m.type === 'attributes') { versionImg(m.target); continue; }
+            for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                if (n.tagName === 'IMG') versionImg(n);
+                else if (n.firstElementChild) n.querySelectorAll('img').forEach(versionImg);
+            }
+        }
+    });
+    avatarObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] });
+}
+
+/** After a card picture changed: fresh copies in the browser cache, and every picture of it on the page redrawn. */
+export async function avatarChanged(avatar) {
+    const plain = [`/characters/${encodeURIComponent(avatar)}`];
+    try { plain.push(ctx().getThumbnailUrl('avatar', avatar)); } catch { /* old SillyTavern */ }
+    // the plain URLs too: whatever SillyTavern draws after a page reload must not get the old copy
+    await Promise.allSettled(plain.map(u => fetch(u, { cache: 'reload' })));
+    avatarVersions.set(avatar, Date.now().toString(36));
+    watchAvatars();
+    document.querySelectorAll('img').forEach(versionImg);
 }
 
 export function personaName(id) {

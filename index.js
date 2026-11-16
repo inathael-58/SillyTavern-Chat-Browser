@@ -429,7 +429,7 @@ async function afterRename({ avatarId, groupId, oldFileName, newFileName } = {},
             if (c.mainChat === oldId) c.mainChat = newId;
         } catch (e) {
             console.warn(LOG, 'relink', c.key, e);
-            toast.warn(`แก้ลิงก์ภาคต่อในแชท "${c.chatId}" ไม่สำเร็จ: ${errText(e)}`);
+            toast.warn(`แก้ลิงก์ตอนต่อในแชท "${c.chatId}" ไม่สำเร็จ: ${errText(e)}`);
         }
     }
     ui.render();
@@ -701,8 +701,8 @@ Object.assign(ui, {
             <div class="cb_main">
                 <div class="cb_l1">
                     <span class="cb_name" title="${esc(c.chatId)}">${pinned ? '<i class="fa-solid fa-thumbtack cb_pin"></i>' : ''}${esc(c.chatId)}</span>
-                    ${part && e.story && !compact ? `<button class="cb_pill cb_part cb_partsbtn${expanded ? ' cb_on' : ''}" data-parts="1" title="เรื่องต่อเนื่อง ${parts.length} แชท · รวม ${e.story.total} ข้อความ — แตะเพื่อดูทุกภาค"><i class="fa-solid fa-link"></i>ภาค ${part}/${parts.length}<i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'} cb_pchev"></i></button>`
-                        : part && !e.story ? '<span class="cb_pill cb_part" title="ภาคต่อของแชทก่อนหน้า (แชทก่อนหน้าถูกลบหรือเปลี่ยนชื่อแล้ว)"><i class="fa-solid fa-link"></i>ภาค ' + part + '</span>' : ''}
+                    ${part && e.story && !compact ? `<button class="cb_pill cb_part cb_partsbtn${expanded ? ' cb_on' : ''}" data-parts="1" title="เรื่องต่อเนื่อง ${parts.length} แชท · รวม ${e.story.total} ข้อความ — แตะเพื่อดูทุกตอน"><i class="fa-solid fa-link"></i>ตอน ${part}/${parts.length}<i class="fa-solid fa-chevron-${expanded ? 'up' : 'down'} cb_pchev"></i></button>`
+                        : part && !e.story ? '<span class="cb_pill cb_part" title="ตอนต่อของแชทก่อนหน้า (แชทก่อนหน้าถูกลบหรือเปลี่ยนชื่อแล้ว)"><i class="fa-solid fa-link"></i>ตอน ' + part + '</span>' : ''}
                     ${showParts && compact ? this.chipsHtml(parts, c, cur, true) : ''}
                     ${branchOf ? `<span class="cb_pill cb_branch" title="แตกกิ่งมาจาก ${esc(branchOf)}"><i class="fa-solid fa-code-branch"></i>กิ่ง</span>` : ''}
                     ${this.countHtml(c, e.story)}
@@ -746,11 +746,11 @@ Object.assign(ui, {
         // Compact rows keep to one line: the last three parts, plus a button for the full list.
         const hidden = short && parts.length > 3 ? parts.length - 3 : 0;
         const shown = hidden ? parts.slice(-3) : parts;
-        const more = short ? `<button class="cb_partchip cb_partsbtn${this.expanded.has(head.key) ? ' cb_on' : ''}" data-parts="1" title="ทุกภาค (${parts.length})">${hidden ? `+${hidden}` : '<i class="fa-solid fa-link"></i>'}</button>` : '';
+        const more = short ? `<button class="cb_partchip cb_partsbtn${this.expanded.has(head.key) ? ' cb_on' : ''}" data-parts="1" title="ทุกตอน (${parts.length})">${hidden ? `+${hidden}` : '<i class="fa-solid fa-link"></i>'}</button>` : '';
         return `<div class="cb_parts${short ? ' cb_parts_inline' : ''}">${more}${shown.map(p => {
             const pp = linkInfo.get(p.key)?.part ?? 1;
             const u = unreadOf(p);
-            return `<button class="cb_partchip${p.key === head.key ? ' cb_on' : ''}${p.key === cur ? ' cb_cur' : ''}" data-open="${esc(p.key)}" title="ภาค ${pp}: ${esc(p.chatId)} · ${p.count} ข้อความ · ${esc(relTime(p.last))}">${short ? '' : 'ภาค '}${pp}${u ? `<b>+${u}</b>` : ''}</button>`;
+            return `<button class="cb_partchip${p.key === head.key ? ' cb_on' : ''}${p.key === cur ? ' cb_cur' : ''}" data-open="${esc(p.key)}" title="ตอน ${pp}: ${esc(p.chatId)} · ${p.count} ข้อความ · ${esc(relTime(p.last))}">${short ? '' : 'ตอน '}${pp}${u ? `<b>+${u}</b>` : ''}</button>`;
         }).join(short ? '' : '<i class="fa-solid fa-angle-right cb_partsep"></i>')}</div>`;
     },
 
@@ -815,7 +815,7 @@ Object.assign(ui, {
             ent ? `<button class="cb_chip cb_on cb_entchip" data-entity="">${esc(ent.entityName)}<i class="fa-solid fa-xmark"></i></button>`
                 : curChat ? `<button class="cb_chip" data-entity="${esc(`${curChat.type}|${curChat.entity}`)}"><i class="fa-solid fa-user"></i>${s.view === 'gallery' ? '' : 'เฉพาะ '}${esc(curChat.entityName)}</button>` : '',
             personas.length > 1 ? `<button class="cb_chip cb_personachip${this.persona ? ' cb_on' : ''}" data-personas="1" aria-haspopup="menu">${this.persona ? `<img src="${esc(thumb('persona', this.persona))}" alt="">` : '<i class="fa-solid fa-masks-theater"></i>'}<b>${esc(this.persona ? personas.find(([id]) => id === this.persona)?.[1] ?? this.persona : 'ทุก persona')}</b><i class="fa-solid fa-chevron-down cb_chipchev"></i></button>` : '',
-            `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมภาคต่อ</button>`,
+            `<button class="cb_chip cb_toggle${s.merge ? ' cb_on' : ''}" data-merge="1" title="รวมแชทที่ต่อเรื่องกันเป็นแถวเดียว"><i class="fa-solid fa-link"></i>รวมตอนต่อ</button>`,
         ].join('');
         const shownChats = this.shownN;
         r.querySelector('.cb_title b').textContent = gallery ? 'การ์ด' : 'แชท';
@@ -1471,17 +1471,17 @@ function openMenu(c, anchor) {
     const isOpen = c.key === currentKey();
     const items = [
         ['open', isOpen ? 'fa-solid fa-eye' : 'fa-solid fa-arrow-right-to-bracket', isOpen ? 'กลับไปที่แชทนี้' : 'เปิดแชทนี้'],
-        ...(info?.size > 1 ? info.parts.filter(p => p.key !== c.key).reverse().map(p => [`part:${p.key}`, 'fa-solid fa-book-bookmark', `เปิดภาค ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId}`]) : []),
+        ...(info?.size > 1 ? info.parts.filter(p => p.key !== c.key).reverse().map(p => [`part:${p.key}`, 'fa-solid fa-book-bookmark', `เปิดตอน ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId}`]) : []),
         ['pin', 'fa-solid fa-thumbtack', pinned ? 'เลิกปักหมุด' : 'ปักหมุด'],
         ['rename', 'fa-solid fa-pen', 'เปลี่ยนชื่อ'],
         ['export', 'fa-solid fa-file-export', 'ส่งออกไฟล์แชท…'],
         ['read', 'fa-solid fa-check-double', 'ทำเครื่องหมายว่าอ่านแล้ว', unreadOf(c) > 0],
-        ['link', 'fa-solid fa-link', c.prev ? 'เปลี่ยนภาคก่อนหน้า…' : 'ตั้งเป็นภาคต่อของ…'],
-        ['unlink', 'fa-solid fa-link-slash', 'ยกเลิกการผูกภาคต่อ', !!c.prev],
+        ['link', 'fa-solid fa-link', c.prev ? 'เปลี่ยนตอนก่อนหน้า…' : 'ตั้งเป็นตอนต่อของ…'],
+        ['unlink', 'fa-solid fa-link-slash', 'ยกเลิกการผูกตอนต่อ', !!c.prev],
         ['only', settings().view === 'gallery' ? 'fa-solid fa-id-card' : 'fa-solid fa-filter', settings().view === 'gallery' ? `ดูการ์ด ${c.entityName}` : `ดูเฉพาะแชทของ ${c.entityName}`, !(settings().view === 'gallery' && ui.card === `${c.type}|${c.entity}`)],
         ['delete', 'fa-solid fa-trash', 'ลบแชท', true, true],
     ].filter(x => x[3] !== false);
-    const head = `<div class="cb_menuhead"><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${info?.size > 1 ? ` · ภาค ${info.part} จาก ${info.size} แชท` : ''}</span></div>`;
+    const head = `<div class="cb_menuhead"><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${info?.size > 1 ? ` · ตอน ${info.part} จาก ${info.size} แชท` : ''}</span></div>`;
     popMenu(head + items.map(([id, icon, label, , danger]) => `<button role="menuitem" data-act="${esc(id)}"${danger ? ' class="cb_danger"' : ''}><i class="${icon}"></i>${esc(label)}</button>`).join(''), anchor, async act => {
         try { await menuAction(act, c); } catch (err) { console.error(LOG, err); toast.err(errText(err)); }
     });
@@ -1561,7 +1561,7 @@ async function menuAction(act, c) {
     }
     if (act === 'export') return openExport(c);
     if (act === 'rename') {
-        const name = await sheetPrompt({ title: 'เปลี่ยนชื่อแชท', value: c.chatId, ok: 'เปลี่ยนชื่อ', hint: `${esc(c.entityName)} · แชทที่อ้างถึงชื่อนี้ (ภาคต่อ กิ่ง) จะถูกแก้ตาม${cab()?.dropboxConnected?.() ? ' · ไฟล์ใน Dropbox ย้ายไปชื่อใหม่ และเครื่องอื่นเปลี่ยนตามตอนซิงค์' : ''}` });
+        const name = await sheetPrompt({ title: 'เปลี่ยนชื่อแชท', value: c.chatId, ok: 'เปลี่ยนชื่อ', hint: `${esc(c.entityName)} · แชทที่อ้างถึงชื่อนี้ (ตอนต่อ กิ่ง) จะถูกแก้ตาม${cab()?.dropboxConnected?.() ? ' · ไฟล์ใน Dropbox ย้ายไปชื่อใหม่ และเครื่องอื่นเปลี่ยนตามตอนซิงค์' : ''}` });
         if (name == null) return;
         const done = await renameChat(c, name);
         if (done) { toast.ok(`เปลี่ยนชื่อเป็น "${done}" แล้ว`); ui.render(); reload(); }
@@ -1591,7 +1591,7 @@ async function menuAction(act, c) {
         const parent = await pickPrev(c);
         if (!parent) return;
         await setPrev(c, parent.chatId);
-        toast.ok(`ตั้ง "${c.chatId}" เป็นภาคต่อของ "${parent.chatId}" แล้ว`);
+        toast.ok(`ตั้ง "${c.chatId}" เป็นตอนต่อของ "${parent.chatId}" แล้ว`);
         ui.render();
     }
 }
@@ -1611,8 +1611,8 @@ async function pickPrev(c) {
     if (!options.length) { toast.info('ตัวละครนี้ไม่มีแชทอื่นให้เลือก'); return null; }
     return await sheetPick({
         title: `"${c.chatId}" ต่อจากแชทไหน?`,
-        hint: 'แชทที่เลือกจะเป็นภาคก่อนหน้า — ใช้กับแชทที่ต่อเรื่องเองด้วยมือ (แชทที่สร้างด้วย “เริ่มแชทใหม่ต่อเรื่อง” ของ Memory Hub ผูกให้อัตโนมัติอยู่แล้ว)',
-        items: options.map(x => ({ value: x, html: `<b>${esc(x.chatId)}</b><span>${x.count} ข้อความ · ${esc(relTime(x.last))}${linkInfo.get(x.key)?.size > 1 ? ` · ภาค ${linkInfo.get(x.key).part}` : ''}</span>`, selected: x.chatId === c.prev })),
+        hint: 'แชทที่เลือกจะเป็นตอนก่อนหน้า — ใช้กับแชทที่ต่อเรื่องเองด้วยมือ (แชทที่สร้างด้วย “เริ่มแชทใหม่ต่อเรื่อง” ของ Memory Hub ผูกให้อัตโนมัติอยู่แล้ว)',
+        items: options.map(x => ({ value: x, html: `<b>${esc(x.chatId)}</b><span>${x.count} ข้อความ · ${esc(relTime(x.last))}${linkInfo.get(x.key)?.size > 1 ? ` · ตอน ${linkInfo.get(x.key).part}` : ''}</span>`, selected: x.chatId === c.prev })),
     });
 }
 
@@ -1707,13 +1707,13 @@ async function openExport(c) {
         }
         const list = format === 'story' ? parts : [c];
         const total = list.reduce((n, p) => n + (p.count || 0), 0);
-        let text = exportHead(format === 'story' ? `${c.entityName} — ทั้งเรื่อง (${list.length} ภาค)` : c.chatId,
+        let text = exportHead(format === 'story' ? `${c.entityName} — ทั้งเรื่อง (${list.length} ตอน)` : c.chatId,
             [c.entityName, `${total} ข้อความ`, c.personaName ? `persona: ${c.personaName}` : '', `ส่งออกเมื่อ ${now}`]);
         text += list.map(p => {
             const body = chatToText(p, files.get(p.key) || [], rx, clean);
-            return format === 'story' ? `──── ภาค ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId} ────\n\n${body}` : body;
+            return format === 'story' ? `──── ตอน ${linkInfo.get(p.key)?.part ?? '?'} · ${p.chatId} ────\n\n${body}` : body;
         }).join('\n\n\n');
-        return { name: fileName(format === 'story' ? `${c.entityName} - ทั้งเรื่อง ${list.length} ภาค` : c.chatId, 'txt'), text: `${text}\n` };
+        return { name: fileName(format === 'story' ? `${c.entityName} - ทั้งเรื่อง ${list.length} ตอน` : c.chatId, 'txt'), text: `${text}\n` };
     };
     const run = async (a, btn, share) => {
         try {
@@ -1729,11 +1729,11 @@ async function openExport(c) {
     };
     await sheet({
         title: 'ส่งออกแชท',
-        body: `<div class="cb_delone">${ui.avatarHtml(c)}<div><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${hasStory ? ` · ภาค ${info.part} จาก ${parts.length}` : ''}</span></div></div>
+        body: `<div class="cb_delone">${ui.avatarHtml(c)}<div><b>${esc(c.chatId)}</b><span>${esc(c.entityName)} · ${c.count} ข้อความ${hasStory ? ` · ตอน ${info.part} จาก ${parts.length}` : ''}</span></div></div>
             <div class="cb_picklist cb_expopts">
                 ${option('jsonl', 'fa-solid fa-file-code', 'ไฟล์แชท .jsonl', 'ไฟล์ต้นฉบับของ SillyTavern ครบทุกอย่าง นำเข้ากลับได้ที่ Manage chat files → Import')}
                 ${option('txt', 'fa-solid fa-file-lines', 'ข้อความอ่านง่าย .txt', 'ชื่อ เวลา และข้อความ ทีละข้อความ เปิดอ่านในแอปไหนก็ได้')}
-                ${hasStory ? option('story', 'fa-solid fa-book', `ทั้งเรื่อง ${parts.length} ภาค .txt`, 'รวมทุกภาคของเรื่องนี้เป็นไฟล์เดียว เรียงจากภาคแรก') : ''}
+                ${hasStory ? option('story', 'fa-solid fa-book', `ทั้งเรื่อง ${parts.length} ตอน .txt`, 'รวมทุกตอนของเรื่องนี้เป็นไฟล์เดียว เรียงจากตอนแรก') : ''}
             </div>
             <label class="cb_expclean" hidden><input type="checkbox" checked><span>เหลือแค่บทบรรยายและบทพูด<small>ตัด &lt;think&gt; แผงสเตตัส HTML และข้อมูลระบบออก</small></span></label>
             <p class="cb_note cb_expstate"><i class="fa-solid fa-circle-notch fa-spin"></i>กำลังอ่านแชท…</p>`,
