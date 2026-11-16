@@ -21,7 +21,7 @@ import {
     charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
     sheet, sheetConfirm, sheetPrompt, sheetPick,
 } from './core.js';
-import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover, galleryEntities, pickTags, startNewChat, bulkAvailable, handOffToBulk } from './gallery.js';
+import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover, galleryEntities, pickTags, startNewChat, bulkAvailable, handOffToBulk, updateFromFile } from './gallery.js';
 import { openEditor, editorOpen, closeEditor, closeEditorGuarded } from './editor.js';
 
 // ---------------------------------------------------------------- display regex
@@ -705,6 +705,7 @@ Object.assign(ui, {
                         : part && !e.story ? '<span class="cb_pill cb_part" title="ภาคต่อของแชทก่อนหน้า (แชทก่อนหน้าถูกลบหรือเปลี่ยนชื่อแล้ว)"><i class="fa-solid fa-link"></i>ภาค ' + part + '</span>' : ''}
                     ${showParts && compact ? this.chipsHtml(parts, c, cur, true) : ''}
                     ${branchOf ? `<span class="cb_pill cb_branch" title="แตกกิ่งมาจาก ${esc(branchOf)}"><i class="fa-solid fa-code-branch"></i>กิ่ง</span>` : ''}
+                    ${this.countHtml(c, e.story)}
                     <span class="cb_time" title="${esc(fullTime(c.last))}">${esc(relTime(c.last))}</span>
                 </div>
                 <div class="cb_l2">
@@ -731,6 +732,13 @@ Object.assign(ui, {
                 <button class="cb_iconbtn cb_more" title="ตัวเลือก" aria-label="ตัวเลือก"><i class="fa-solid fa-ellipsis-vertical"></i></button>
             </div>
         </div>`;
+    },
+
+    /** How many messages the chat has, on the row's first line (the detail view says it in its own line). */
+    countHtml(c, story) {
+        const n = Number(c.count) || 0;
+        const label = `${n} ข้อความ${story ? ` · ทั้งเรื่อง ${story.total}` : ''}`;
+        return `<span class="cb_count" title="${label}" aria-label="${label}"><i class="fa-regular fa-message"></i>${n.toLocaleString('th-TH')}</span>`;
     },
 
     /** One button per part of the story; tap opens that part. */
@@ -1229,6 +1237,8 @@ function wireBrowser(root) {
             else if (t.closest('[data-continue]')) doOpen(data.byKey.get(t.closest('[data-continue]').dataset.continue));
             else if (t.closest('[data-newchat]')) startNewChat(id);
             else if (t.closest('[data-edit]')) openEditor(id.slice(id.indexOf('|') + 1));
+            // straight from the tap, nothing awaited first: iOS opens the file picker only inside a user gesture
+            else if (t.closest('[data-cuupdate]')) updateFromFile(id.slice(id.indexOf('|') + 1));
             else if (t.closest('[data-note]')) {
                 ui.noteOpen = !ui.noteOpen;
                 const box = card.querySelector('.cb_cnote');
@@ -1843,7 +1853,7 @@ function renderPlan(api, plan) {
     const removeHtml = [...byEntity.entries()].map(([label, list]) => `
         <div class="cb_cgroup">
             <label class="cb_cgrouphead"><input type="checkbox" data-group="${esc(label)}" checked><b>${esc(label)}</b><span>${list.length} แชท${list[0].why === 'noentity' ? ' · <em>ไม่มีตัวละคร/กลุ่มนี้ในเครื่องนี้</em>' : ''}</span></label>
-            ${list.map(x => `<label class="cb_citem"><input type="checkbox" data-key="${esc(x.key)}" data-g="${esc(label)}" checked><span class="cb_cname">${esc(x.chatId)}</span><span class="cb_cinfo">${x.when ? esc(relTime(x.when)) : ''}${x.size ? ` · ${fmtBytes(x.size)}` : ''}</span></label>`).join('')}
+            ${list.map(x => `<label class="cb_citem"><input type="checkbox" data-key="${esc(x.key)}" data-g="${esc(label)}" checked><span class="cb_cname">${esc(x.chatId)}</span><span class="cb_cinfo">${[x.count ? `${x.count} ข้อความ` : '', x.when ? esc(relTime(x.when)) : '', x.size ? fmtBytes(x.size) : ''].filter(Boolean).join(' · ')}</span></label>`).join('')}
         </div>`).join('');
     api.body.innerHTML = `
         <div class="cb_cstats">
