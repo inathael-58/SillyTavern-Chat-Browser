@@ -2034,3 +2034,17 @@ html.cbp-pal :is(.cb_root:not([data-scheme]), .cb_settings) {
 }
 html.cbp-pal .cb_root[data-scheme="light"] { --cb-accent: var(--cbp-p-accent-light); }
 html.cbp-pal .cb_root[data-scheme="dark"] { --cb-accent: var(--cbp-p-accent-dark); }
+
+/* ST's plain .menu_button is display:flex, which drops the space between an icon and its
+   label. Zero-specificity roots, so a gap this extension already sets still wins. */
+:where([class^="cb_"], [class*=" cb_"], [id^="cb_"], [class^="rv_"], [class*=" rv_"], [id^="rv_"]) .menu_button { gap: 0.4em; }
+
+/* ST draws inputs with a grey film (var(--black30a)) that turns muddy on light themes.
+   In these panels, once the palette is ready, inputs take its card surface and readable
+   text instead, so no custom CSS is needed. */
+html.cbp-pal :where(.cb_root:not([data-scheme]), .cb_settings) :is(.text_pole, textarea, select, input:is([type="text"], [type="search"], [type="number"], [type="url"], [type="email"], [type="password"], :not([type]))) {
+    background-color: var(--cbp-p-surface2);
+    color: var(--cbp-p-fg);
+    border-color: var(--cbp-p-line);
+}
+html.cbp-pal :where(.cb_root:not([data-scheme]), .cb_settings) :is(.text_pole, textarea, input)::placeholder { color: var(--cbp-p-muted); opacity: 1; }
