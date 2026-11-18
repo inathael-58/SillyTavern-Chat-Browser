@@ -991,11 +991,10 @@ Object.assign(ui, {
             b.classList.toggle('cb_on', b.dataset.sort === sort);
             b.hidden = b.dataset.sort === (gallery ? 'character' : 'added');
         });
-        // the gallery's select button picks cards for Bulk Manager: only there when it is installed
+        // the gallery's select button picks cards: mark them read, or hand them to Bulk Manager when installed
         const sel = r.querySelector('.cb_selectbtn');
         const cardsMode = gallery && !this.card;
-        sel.hidden = cardsMode && !bulkAvailable() && !this.selecting;
-        sel.title = cardsMode ? 'เลือกหลายการ์ด (ส่งต่อให้ Bulk Manager)' : 'เลือกหลายแชท';
+        sel.title = cardsMode ? 'เลือกหลายการ์ด' : 'เลือกหลายแชท';
         r.querySelectorAll('.cb_view [data-view]').forEach(b => b.classList.toggle('cb_on', b.dataset.view === s.view));
         const unread = totalUnread();
         const groupsN = gallery ? (ctx().groups || []).length : data.chats.filter(c => c.type === 'group').length;
@@ -1049,7 +1048,7 @@ Object.assign(ui, {
         r.querySelector('.cb_clean').title = !synced ? 'ใช้ได้เมื่อเปิดซิงค์แชทระหว่างเครื่องใน Chat Auto Backup แล้ว (กดซิงค์อย่างน้อยหนึ่งครั้ง)' : 'ทำให้ Dropbox และทุกเครื่องมีแชทเหมือนเครื่องนี้เป๊ะ';
     },
 
-    /** What select mode picks here: cards on the gallery grid (for Bulk Manager), chats everywhere else. */
+    /** What select mode picks here: cards on the gallery grid, chats everywhere else. */
     selectsCards() {
         return settings().view === 'gallery' && !this.card;
     },
@@ -1063,10 +1062,14 @@ Object.assign(ui, {
         bar.classList.toggle('rv_cardsel', cards);
         const n = cards ? this.selCards.size : this.selected.size;
         bar.querySelector('.cb_selcount').textContent = cards ? (n ? `${n} การ์ด` : 'แตะเลือกการ์ด') : (n ? `เลือก ${n} แชท` : 'แตะแชทเพื่อเลือก');
+        const bm = bulkAvailable();
+        // Bulk Manager takes characters only: its buttons wait for one among the picked cards
+        const chars = cards && [...this.selCards].some(id => id.startsWith('character|'));
         bar.querySelectorAll('[data-bulk]').forEach(b => {
             const forCards = b.hasAttribute('data-cards');
-            b.hidden = b.dataset.bulk !== 'done' && forCards !== cards;
-            b.classList.toggle('cb_disabled', b.dataset.bulk !== 'done' && !n);
+            const forBm = b.hasAttribute('data-bm');
+            b.hidden = b.dataset.bulk !== 'done' && (forCards !== cards || (forBm && !bm));
+            b.classList.toggle('cb_disabled', b.dataset.bulk !== 'done' && (!n || (forBm && !chars)));
         });
     },
 });
@@ -1101,6 +1104,49 @@ const SCHEMES = [
     ['light', 'fa-solid fa-sun', 'กลางวัน'],
     ['dark', 'fa-solid fa-moon', 'กลางคืน'],
 ];
+
+/** Hover on covers, picked in the settings panel. holo, tilt and spot follow the pointer. */
+const HOVERS = [
+    ['glint', 'แสงวาบ'],
+    ['holo', 'ฟอยล์รุ้ง'],
+    ['tilt', 'เอียงตามเมาส์'],
+    ['spot', 'สปอตไลต์'],
+    ['glow', 'ขอบเรืองแสง'],
+    ['bloom', 'สว่างนุ่ม'],
+    ['none', 'ไม่มี'],
+];
+const FOLLOWS_POINTER = new Set(['holo', 'tilt', 'spot']);
+const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
+function applyHover(root = ui.root) {
+    if (root) root.dataset.hover = hoverMode();
+}
+
+/** Where the mouse is on a cover, for the hover styles that follow it (one update per frame). */
+function wireHoverPointer(list) {
+    let frame = 0, last = null;
+    const reset = el => { el.style.removeProperty('--rx'); el.style.removeProperty('--ry'); };
+    list.addEventListener('pointermove', e => {
+        if (e.pointerType !== 'mouse' || !FOLLOWS_POINTER.has(hoverMode())) return;
+        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
+        if (!el) return;
+        last = { el, x: e.clientX, y: e.clientY };
+        frame ||= requestAnimationFrame(() => {
+            frame = 0;
+            const { el: t, x, y } = last;
+            const r = t.getBoundingClientRect();
+            const fx = clamp((x - r.left) / r.width, 0, 1), fy = clamp((y - r.top) / r.height, 0, 1);
+            t.style.setProperty('--mx', `${(fx * 100).toFixed(1)}%`);
+            t.style.setProperty('--my', `${(fy * 100).toFixed(1)}%`);
+            t.style.setProperty('--ry', `${((fx - 0.5) * 14).toFixed(2)}deg`);
+            t.style.setProperty('--rx', `${((0.5 - fy) * 14).toFixed(2)}deg`);
+        });
+    }, { passive: true });
+    // leaving a cover: it settles back flat
+    list.addEventListener('pointerout', e => {
+        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
+        if (el && !el.contains(e.relatedTarget)) reset(el);
+    }, { passive: true });
+}
 
 function applyScheme(root = ui.root) {
     if (!root) return;
@@ -1244,9 +1290,10 @@ function openBrowser() {
                 <button data-bulk="unpin">เลิกปัก</button>
                 <button data-bulk="read"><i class="fa-solid fa-check-double"></i>อ่านแล้ว</button>
                 <button data-bulk="delete" class="cb_danger"><i class="fa-solid fa-trash"></i>ลบ</button>
-                <button data-bulk="cdelete" data-cards class="cb_danger" title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-trash"></i>ลบ</button>
-                <button data-bulk="cbackup" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-box-archive"></i>สำรอง</button>
-                <button data-bulk="ccopy" data-cards title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-clone"></i>คัดลอก</button>
+                <button data-bulk="cread" data-cards title="ทุกแชทของการ์ดที่เลือกอ่านแล้ว"><i class="fa-solid fa-check-double"></i>อ่านแล้ว</button>
+                <button data-bulk="cdelete" data-cards data-bm class="cb_danger" title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-trash"></i>ลบ</button>
+                <button data-bulk="cbackup" data-cards data-bm title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-box-archive"></i>สำรอง</button>
+                <button data-bulk="ccopy" data-cards data-bm title="เปิด Bulk Manager พร้อมการ์ดที่เลือก"><i class="fa-solid fa-clone"></i>คัดลอก</button>
                 <button data-bulk="done">เสร็จ</button>
             </footer>
             <div class="cb_layer"></div>
@@ -1259,6 +1306,7 @@ function openBrowser() {
         fitViewport();
         root.dataset.view = s.view;
         applyScheme(root);
+        applyHover(root);
         wireBrowser(root);
         ui.render();
     } catch (err) {
@@ -1345,6 +1393,7 @@ function wireBrowser(root) {
     const list = root.querySelector('.cb_list');
     const search = root.querySelector('.cb_search');
     const clearq = root.querySelector('.cb_clearq');
+    wireHoverPointer(list);
 
     // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
     // with the card editor open, unsaved edits are asked about first
@@ -1510,7 +1559,7 @@ function wireBrowser(root) {
         skipClick = false;
         if (e.pointerType !== 'touch' || ui.selecting) return;
         const row = e.target.closest('.cb_row');
-        const tile = !row && ui.selectsCards() && bulkAvailable() ? e.target.closest('.cb_tile') : null;
+        const tile = !row && ui.selectsCards() ? e.target.closest('.cb_tile') : null;
         if ((!row && !tile) || e.target.closest('button')) return;
         const key = row ? row.dataset.key : tile.dataset.card;
         pressTimer = setTimeout(() => {
@@ -1651,16 +1700,25 @@ function toggleSelect(key) {
 
 /** Gallery: pick a card for Bulk Manager (characters only — groups are not in Bulk Manager's characters tab). */
 function toggleSelectCard(id) {
-    if (!id.startsWith('character|')) { toast.info('ส่งต่อให้ Bulk Manager ได้เฉพาะตัวละคร (ยังไม่รองรับกลุ่ม)'); return; }
     if (ui.selCards.has(id)) ui.selCards.delete(id); else ui.selCards.add(id);
     ui.root?.querySelector(`.cb_tile[data-card="${CSS.escape(id)}"]`)?.classList.toggle('cb_selected', ui.selCards.has(id));
     ui.renderSelbar();
 }
 
 async function bulk(action) {
+    if (action === 'cread') {
+        // every chat of the picked cards (characters and groups)
+        const list = data.chats.filter(c => ui.selCards.has(`${c.type}|${c.entity}`));
+        for (const c of list) markSeen(c.key, c.count);
+        const cards = ui.selCards.size;
+        setSelecting(false);
+        updateLauncherBadge();
+        toast.ok(`อ่านแล้ว ${list.length.toLocaleString('th-TH')} แชท จาก ${cards.toLocaleString('th-TH')} การ์ด`);
+        return;
+    }
     if (action.startsWith('c')) {
         const avatars = [...ui.selCards].filter(id => id.startsWith('character|')).map(id => id.slice('character|'.length));
-        if (!avatars.length) return;
+        if (!avatars.length) { toast.info('Bulk Manager รับเฉพาะตัวละคร (ยังไม่รองรับกลุ่ม)'); return; }
         await handOffToBulk(avatars, { cdelete: 'delete', cbackup: 'backup', ccopy: 'copy' }[action]);
         return;
     }
@@ -2598,6 +2656,11 @@ function renderSettingsPanel() {
                     </select>
                 </div>
                 <div class="cb_setrow">
+                    <span>เอฟเฟกต์ปกการ์ด</span>
+                    <select id="cb_set_hover" class="text_pole">${HOVERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
+                </div>
+                <small class="cb_sethint">ตอนชี้เมาส์ที่ปกการ์ดในแกลเลอรีและหน้าการ์ด (เฉพาะคอมที่ใช้เมาส์ บนจอสัมผัสไม่มี) ไม่มีแบบไหนขยายรูป · ปิดเองถ้าเปิด "ลดการเคลื่อนไหว" ในระบบ</small>
+                <div class="cb_setrow">
                     <span>การ์ดต่อหน้า</span>
                     <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
                 </div>
@@ -2646,6 +2709,8 @@ function renderSettingsPanel() {
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
     $('cb_set_cardbtn').value = cardMode();
+    $('cb_set_hover').value = hoverMode();
+    $('cb_set_hover').addEventListener('change', e => { s.hover = e.target.value; saveSettings(); applyHover(); });
     $('cb_set_pagecards').value = String(s.pageCards);
     $('cb_set_pagechats').value = String(s.pageChats);
     $('cb_set_pagecards').addEventListener('change', e => setPageSize('cards', Number(e.target.value)));

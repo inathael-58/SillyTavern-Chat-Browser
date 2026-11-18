@@ -447,7 +447,7 @@ export const galleryUi = {
         return `<div class="cb_tile${isOpen ? ' cb_isopen' : ''}${card.unread ? ' cb_unread' : ''}${sel ? ' cb_selected' : ''}${card.count ? '' : ' rv_fresh'}" data-card="${esc(card.id)}" role="button" tabindex="0"${i < 40 ? ` data-a style="--i:${i}"` : ''} aria-label="${esc(card.name)} · ${card.count ? `${card.count} แชท` : 'ยังไม่มีแชท'}">
             <div class="cb_cover">${this.coverHtml(m)}</div>
             <div class="cb_tiletop">
-                ${this.selecting ? `<span class="rv_tcheck${card.type === 'group' ? ' rv_nosel' : ''}"><i class="fa-solid fa-check"></i></span>` : ''}
+                ${this.selecting ? '<span class="rv_tcheck"><i class="fa-solid fa-check"></i></span>' : ''}
                 ${m.fav ? '<span class="cb_tmark" title="ตัวละครโปรด"><i class="fa-solid fa-star"></i></span>' : ''}
                 ${card.pinned ? '<span class="cb_tmark" title="มีแชทที่ปักหมุด"><i class="fa-solid fa-thumbtack"></i></span>' : ''}
                 ${card.type === 'group' ? '<span class="cb_tmark" title="กลุ่ม"><i class="fa-solid fa-users"></i></span>' : ''}
