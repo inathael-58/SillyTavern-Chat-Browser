@@ -280,9 +280,10 @@ export function searchText(c) {
  *   sort:  recent | character | name | size
  * Returns [{ kind: 'section', … } | { kind: 'chat', chat, story?: { parts, total, unread } }]
  */
-export function buildEntries(chats, { sort = 'recent', merge = true, query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0 } = {}) {
+export function buildEntries(chats, { sort = 'recent', merge = true, query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0, stories: known = null } = {}) {
     const q = String(query ?? '').trim().toLowerCase();
-    const stories = linkStories(chats);
+    // `stories`: linkStories(chats) when the caller has it already (it is the slow part with many chats)
+    const stories = known ?? linkStories(chats);
     const pinned = c => !!pins[c.key];
 
     // Search and filters apply to any part of a story, so a story shows if one part matches.
@@ -694,4 +695,69 @@ export function cardButtonAction(mode, gesture, open = false) {
     if (mode !== 'hold' && mode !== 'tap') return 'st';
     if (open && gesture === 'tap') return 'st';
     return (mode === 'tap') === (gesture === 'tap') ? 'reverie' : 'st';
+}
+
+// ---------------------------------------------------------------- pages
+
+/** Cards per page and chats per page the user can pick; 0 = everything on one long page. */
+export const PAGE_SIZES = Object.freeze({ cards: Object.freeze([0, 24, 48, 96, 200]), chats: Object.freeze([0, 50, 100, 200, 500]) });
+
+/** Which items a page shows: page is clamped to 1…pages. size 0 = one page with everything. */
+export function pageRange(total, size, page = 1) {
+    const n = Math.max(0, Number(total) || 0);
+    const per = Math.max(0, Math.floor(Number(size) || 0));
+    if (!per || n <= per) return { page: 1, pages: 1, from: 0, to: n };
+    const pages = Math.ceil(n / per);
+    const p = Math.min(pages, Math.max(1, Math.floor(Number(page) || 1)));
+    return { page: p, pages, from: (p - 1) * per, to: Math.min(n, p * per) };
+}
+
+/**
+ * One page of list entries (from buildEntries), counted in chats: section headers are not
+ * counted, and a page that starts inside a section repeats its header (marked `cont`).
+ */
+export function pageEntries(entries, size, page = 1) {
+    const chats = entries.reduce((n, e) => n + (e.kind === 'chat' ? 1 : 0), 0);
+    const r = pageRange(chats, size, page);
+    if (r.pages === 1) return { ...r, entries };
+    const out = [];
+    let section = null, sectionFrom = 0, emitted = null, i = 0;
+    for (const e of entries) {
+        if (i >= r.to) break;
+        if (e.kind !== 'chat') { section = e; sectionFrom = i; continue; }
+        if (i >= r.from) {
+            if (section && emitted !== section) { out.push(sectionFrom < r.from ? { ...section, cont: true } : section); emitted = section; }
+            out.push(e);
+        }
+        i++;
+    }
+    return { ...r, entries: out };
+}
+
+// ---------------------------------------------------------------- keeping the chat list up to date
+
+/**
+ * What tells a chat changed: message count, last message time, file size and the metadata the
+ * list shows. Same signature = the cached row (with its cleaned preview) is still right.
+ */
+export function chatSig(c) {
+    return [c.count, c.last, c.size, c.persona ?? '', c.memories, (c.chain || []).join('\u0001'), c.prev ?? '', c.mainChat ?? ''].join('\u0000');
+}
+
+/**
+ * The server lists chats newest-modified first, so after the newest `window` comes back, the
+ * rest is unchanged once the oldest few in it (`tail`) are unchanged. A window shorter than
+ * asked is every chat there is.
+ */
+export function windowSettled(fresh, byKey, asked, tail = 8) {
+    if (fresh.length < asked) return 'complete';
+    const end = fresh.slice(-tail);
+    return end.length && end.every(c => { const old = byKey.get(c.key); return old && chatSig(old) === chatSig(c); }) ? 'settled' : 'more';
+}
+
+/** The cached list with the fresh rows put in (replacing the same chats); `complete` = fresh is every chat. */
+export function mergeChats(cached, fresh, complete = false) {
+    if (complete) return fresh;
+    const seen = new Set(fresh.map(c => c.key));
+    return [...fresh, ...cached.filter(c => !seen.has(c.key))];
 }

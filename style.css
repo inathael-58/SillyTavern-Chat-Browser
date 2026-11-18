@@ -90,7 +90,7 @@
     box-shadow: 0 24px 64px var(--cb-shadow), 0 2px 0 color-mix(in srgb, var(--cb-fg) 6%, transparent) inset;
     overflow: hidden;
     opacity: 0;
-    transform: translateY(14px) scale(0.985);
+    transform: translateY(14px);
     transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 /* the gallery takes more of a big screen: more and bigger covers */
@@ -98,7 +98,7 @@
 .cb_root.cb_in .cb_backdrop { opacity: 1; }
 .cb_root.cb_in .cb_panel { opacity: 1; transform: none; }
 .cb_root.cb_out .cb_backdrop { opacity: 0; }
-.cb_root.cb_out .cb_panel { opacity: 0; transform: translateY(10px) scale(0.99); }
+.cb_root.cb_out .cb_panel { opacity: 0; transform: translateY(10px); }
 
 .cb_root button {
     font: inherit;
@@ -1330,8 +1330,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 }
 .cb_anim .cb_tile[data-a] { animation: cb_tilein 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; animation-delay: calc(var(--i, 0) * var(--step, 28ms)); }
 .cb_oncard .cb_chips { display: none; }
-.cb_tile:hover { transform: translateY(-3px); box-shadow: 0 18px 34px -16px var(--cb-shadow), 0 0 0 1px color-mix(in srgb, var(--cb-fg) 22%, transparent); }
-.cb_tile:active { transform: scale(0.97); transition-duration: 0.1s; }
+.cb_tile:active { filter: brightness(0.92); transition-duration: 0.1s; }
 .cb_tile:focus-visible { box-shadow: 0 0 0 3px var(--cb-accent-line); }
 .cb_tile.cb_isopen { box-shadow: 0 0 0 2.5px var(--cb-accent), 0 14px 30px -14px var(--cb-accent); }
 .cb_tile.cb_back_here { animation: cb_here 1s ease-out; }
@@ -1349,13 +1348,15 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     object-fit: cover;
     object-position: center 18%;
 }
-.cb_thumb { filter: blur(7px) saturate(1.15); transform: scale(1.12); }
+/* the blurred thumbnail sits at the picture's own size: the picture fades in over it without any zoom */
+.cb_thumb { filter: blur(7px) saturate(1.15); }
 /* once the cover has faded in over it, the blurred thumbnail is no longer drawn */
-.cb_thumb.cb_under { visibility: hidden; transition: visibility 0s 0.6s; }
-.cb_full { opacity: 0; transition: opacity 0.5s ease, transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.cb_thumb.cb_under { visibility: hidden; transition: visibility 0s 0.35s; }
+.cb_full { opacity: 0; transition: opacity 0.3s ease; }
 .cb_full.cb_loaded { opacity: 1; }
+/* a picture already scaled and kept (scrolling back, a new filter, back from a card) shows at once */
+.cb_full.cb_now { transition: none; }
 .cb_full.cb_failed { display: none; }
-.cb_tile:hover .cb_full { transform: scale(1.045); }
 .cb_tcollage {
     position: absolute;
     inset: 0;
@@ -1423,7 +1424,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 .cb_tileinfo span { font-size: 0.74em; opacity: 0.82; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cb_tileinfo em { font-style: normal; font-weight: 700; color: color-mix(in srgb, var(--cb-accent) 45%, #fff); }
 
-@keyframes cb_tilein { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
+@keyframes cb_tilein { from { opacity: 0; transform: translateY(14px); } }
 @keyframes cb_here { 0% { box-shadow: 0 0 0 3px var(--cb-accent); } 100% { box-shadow: 0 10px 24px -14px var(--cb-shadow), 0 0 0 1px var(--cb-line); } }
 
 /* grid toolbar: card count and cover size */
@@ -1434,7 +1435,6 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 /* compact: small covers, many on screen, for flicking through a big collection */
 .cb_grid.cb_g_compact { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
 .cb_g_compact .cb_tile { border-radius: 12px; box-shadow: 0 6px 14px -10px var(--cb-shadow), 0 0 0 1px var(--cb-line); }
-.cb_g_compact .cb_tile:hover { transform: translateY(-2px); }
 .cb_g_compact .cb_tile.cb_isopen { box-shadow: 0 0 0 2px var(--cb-accent), 0 8px 18px -10px var(--cb-accent); }
 .cb_g_compact .cb_tiletop { top: 5px; left: 5px; right: 5px; gap: 3px; }
 .cb_g_compact .cb_tmark { width: 19px; height: 19px; font-size: 0.55em; }
@@ -1450,7 +1450,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 .cb_card.cb_enter { animation: cb_cardin 0.32s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .cb_card.cb_from_r { animation: cb_fromr 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .cb_card.cb_from_l { animation: cb_froml 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
-@keyframes cb_cardin { from { opacity: 0; transform: scale(0.98); } }
+@keyframes cb_cardin { from { opacity: 0; transform: translateY(8px); } }
 @keyframes cb_fromr { from { opacity: 0; transform: translateX(28px); } }
 @keyframes cb_froml { from { opacity: 0; transform: translateX(-28px); } }
 
@@ -1522,8 +1522,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     animation: cb_heroin 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .cb_heroimg .cb_tcollage { position: absolute; inset: 0; }
-.cb_heroimg:hover .cb_full { transform: scale(1.03); }
-@keyframes cb_heroin { from { opacity: 0; transform: translateY(10px) scale(0.96); } }
+@keyframes cb_heroin { from { opacity: 0; transform: translateY(10px); } }
 .cb_heroinfo { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; width: 100%; }
 .cb_heroinfo h3 {
     margin: 0;
@@ -1727,9 +1726,87 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     .cb_sort button { padding: 0 4px !important; }
 }
 
+/* hover (mouse only): a glint of light sweeps across the picture once, as when a photo is tilted
+   toward a lamp — nothing grows or moves. Touch screens get no hover, so nothing sticks after a tap. */
+.cb_tile::after,
+.cb_heroimg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: linear-gradient(115deg, transparent 34%, rgba(255, 255, 255, 0.07) 42%, rgba(255, 255, 255, 0.4) 48%, rgba(255, 255, 255, 0.1) 53%, transparent 62%) no-repeat;
+    background-size: 300% 100%;
+    background-position: 100% 0;
+    mix-blend-mode: screen;
+}
+.cb_heroimg::after { border-radius: inherit; }
+@media (hover: hover) and (pointer: fine) {
+    .cb_tile:hover::after,
+    .cb_heroimg:hover::after { background-position: 0 0; transition: background-position 1.05s cubic-bezier(0.45, 0.05, 0.3, 1); }
+    .cb_tile:hover { box-shadow: 0 18px 34px -16px var(--cb-shadow), 0 0 0 1px color-mix(in srgb, var(--cb-fg) 26%, transparent); }
+    .cb_tile.cb_isopen:hover { box-shadow: 0 0 0 2.5px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
+    .cb_tile.cb_selected:hover { box-shadow: 0 0 0 3px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .cb_tile, .cb_card, .cb_heroimg, .cb_full, .cb_lightbox, .cb_lbimgs img { animation: none !important; transition: none !important; }
+    .cb_tile::after, .cb_heroimg::after { display: none; }
 }
+
+/* ---------------------------------------------------------------- pages */
+
+.rv_pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px 14px;
+    padding: 14px 8px 18px;
+    min-width: 0;
+}
+.rv_pgnav { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.rv_pgnav .cb_iconbtn:disabled { opacity: 0.3; pointer-events: none; }
+.rv_pgnum {
+    min-width: 0;
+    height: 32px;
+    padding: 0 12px !important;
+    border: 1px solid var(--cb-line) !important;
+    border-radius: 999px !important;
+    background: var(--cb-faint) !important;
+    color: var(--cb-fg) !important;
+    font: inherit;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.rv_pgnum span { color: var(--cb-muted); font-weight: 500; }
+.rv_pgnum:hover { border-color: var(--cb-accent-line) !important; }
+#cb_root select.rv_pgselect {
+    width: auto;
+    min-width: 0;
+    max-width: 9.5em;
+    height: 28px;
+    font-size: 0.85em;
+    margin: 0;
+    padding: 0 8px !important;
+    border: 1px solid var(--cb-line) !important;
+    border-radius: 10px !important;
+    background: var(--cb-solid) !important;
+    color: var(--cb-fg) !important;
+    font: inherit;
+}
+/* the bar above the grid or list: count, ‹ 3/42 ›, per page (and cover size in the gallery) */
+.cb_gridbar, .rv_pagetop { flex-wrap: wrap; row-gap: 6px; }
+.rv_pagetop { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 8px 4px; }
+.rv_pagetop > span { font-size: 0.78em; font-weight: 700; color: var(--cb-muted); letter-spacing: 0.02em; }
+.rv_pgtools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; margin-left: auto; }
+.rv_pgtools .rv_pgnum { height: 28px; padding: 0 10px !important; font-size: 0.85em; }
+.rv_pgtools .rv_pgnav .cb_iconbtn { width: 28px; height: 28px; }
+.rv_cont { font-weight: 500; color: var(--cb-muted); }
+/* badges and the name stay above the glint */
+.cb_tiletop, .cb_tileinfo { z-index: 2; }
 
 /* ---------------------------------------------------------------- solid surfaces
    Blur Tint often carries alpha: glass themes pair it with a backdrop blur. A surface
@@ -1776,7 +1853,6 @@ body.no-blur .cb_root :is(.cb_panel, .cb_section) { background: var(--cb-solid);
 .rv_tcheck.rv_nosel { opacity: 0.35; }
 .cb_tile.cb_selected { box-shadow: 0 0 0 3px var(--cb-accent), 0 14px 30px -14px var(--cb-accent); }
 .cb_tile.cb_selected .rv_tcheck { color: var(--cb-on-accent); background: var(--cb-accent); box-shadow: none; }
-.cb_selecting .cb_tile:hover { transform: none; }
 .cb_selbar [data-cards] { color: var(--cb-fg); }
 .cb_selbar.rv_cardsel { gap: 5px; }
 .cb_selbar.rv_cardsel .cb_selcount { min-width: 0; }

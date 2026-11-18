@@ -5,7 +5,7 @@
 import { isAvatarUrl, withVersion, versionOf } from './lib.js';
 
 export const MODULE = 'chat_browser';
-export const VERSION = '2.3.1'; // keep in sync with manifest.json
+export const VERSION = '2.4.0'; // keep in sync with manifest.json
 export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
@@ -28,6 +28,8 @@ export const DEFAULTS = Object.freeze({
     gallerySize: 'large', // large | compact — cover size in the gallery
     galleryTags: Object.freeze([]), // gallery: only cards with every one of these tags
     galleryFav: false,   // gallery: only favourites
+    pageCards: 0,        // gallery: cards per page (0 = all on one page)
+    pageChats: 0,        // list: chats per page (0 = all on one page)
 });
 
 export const ctx = () => SillyTavern.getContext();
@@ -55,6 +57,91 @@ export const wait = ms => new Promise(r => setTimeout(r, ms));
 export const errText = e => String(e?.message ?? e);
 export const lsGet = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v ?? d; } catch { return d; } };
 export const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage full or blocked */ } };
+
+// ---------------------------------------------------------------- IndexedDB (the chat list cache)
+//
+// localStorage holds about 5 MB: a list of a few thousand chats with their previews no longer
+// fits, and a failed write is silent, so every open waited for the server again. IndexedDB has
+// room for it. The rows are kept in CACHE_BUCKETS records by a hash of their key: a refresh that
+// changed three chats rewrites at most three small records (copying all 30,000 rows into storage
+// holds the page up), and reading the list back is still a handful of records, not one per chat.
+// Any failure (private window, blocked storage) just means no cache.
+
+export const CACHE_BUCKETS = 64;
+export function bucketOf(key) {
+    let h = 0x811c9dc5; // FNV-1a, so the buckets fill evenly
+    for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193);
+    // final mix (as in MurmurHash3): without it keys that differ only near the end share low bits
+    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+    return (h >>> 0) % CACHE_BUCKETS;
+}
+
+let idbOpen = null;
+function idb() {
+    idbOpen ??= new Promise((resolve, reject) => {
+        const req = indexedDB.open('reverie', 1);
+        req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('kv')) req.result.createObjectStore('kv'); };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+        req.onblocked = () => reject(new Error('IndexedDB blocked'));
+    }).catch(e => { idbOpen = null; throw e; });
+    return idbOpen;
+}
+
+/** The saved chat list: { meta, rows } (rows empty when there is none). */
+export async function loadChatCache() {
+    try {
+        const db = await idb();
+        return await new Promise((resolve, reject) => {
+            const tx = db.transaction('kv', 'readonly');
+            const kv = tx.objectStore('kv');
+            const meta = kv.get('chats_meta');
+            const parts = Array.from({ length: CACHE_BUCKETS }, (_, i) => kv.get(`chats_${i}`));
+            tx.oncomplete = () => resolve({ meta: meta.result ?? null, rows: parts.flatMap(p => (Array.isArray(p.result) ? p.result : [])) });
+            tx.onerror = tx.onabort = () => reject(tx.error);
+        });
+    } catch (e) {
+        console.warn(LOG, 'cache', e);
+        return { meta: null, rows: [] };
+    }
+}
+
+/** Save the list: `touched` = keys of rows that changed or went (null: write every bucket). */
+export async function saveChatCache(meta, rows, touched = null) {
+    try {
+        const want = touched ? new Set([...touched].map(bucketOf)) : null;
+        if (want && !want.size) { await saveMeta(meta); return true; }
+        const buckets = new Map();
+        for (const r of rows) {
+            const b = bucketOf(r.key);
+            if (want && !want.has(b)) continue;
+            (buckets.get(b) ?? buckets.set(b, []).get(b)).push(r);
+        }
+        const db = await idb();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction('kv', 'readwrite');
+            const kv = tx.objectStore('kv');
+            for (let b = 0; b < CACHE_BUCKETS; b++) if (!want || want.has(b)) kv.put(buckets.get(b) ?? [], `chats_${b}`);
+            kv.put(meta, 'chats_meta');
+            tx.oncomplete = resolve;
+            tx.onerror = tx.onabort = () => reject(tx.error);
+        });
+        return true;
+    } catch (e) {
+        console.warn(LOG, 'cache', e);
+        return false;
+    }
+}
+async function saveMeta(meta) {
+    const db = await idb();
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', 'readwrite');
+        tx.objectStore('kv').put(meta, 'chats_meta');
+        tx.oncomplete = resolve;
+        tx.onerror = tx.onabort = () => reject(tx.error);
+    });
+}
+
 export const cab = () => (globalThis.ChatAutoBackup?.api >= 2 ? globalThis.ChatAutoBackup : null);
 
 // SillyTavern functions that getContext() doesn't offer. Loaded on first use; each one
@@ -165,7 +252,9 @@ export function isGenerating() {
     return !!el && getComputedStyle(el).display !== 'none';
 }
 
-export const data = { chats: [], byKey: new Map(), at: 0, loading: null, error: '' };
+// rev: bumped when the list or a link in it changes · at: last refresh · fullAt: last time every
+// chat was read · rxKey: what made the cached previews
+export const data = { chats: [], byKey: new Map(), rev: 0, at: 0, fullAt: 0, rxKey: null, loading: null, loadingFull: false, wantFull: false, error: '' };
 
 export async function post(url, body) {
     const res = await fetch(url, { method: 'POST', headers: ctx().getRequestHeaders(), body: JSON.stringify(body ?? {}), cache: 'no-cache' });

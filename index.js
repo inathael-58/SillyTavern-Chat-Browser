@@ -15,9 +15,9 @@
 
 import { installThemePalette } from './theme-palette.js';
 import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
-import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
+import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, chatSig, linkStories, mergeChats, pageEntries, pageRange, PAGE_SIZES, relTime, renameInMeta, toMs, windowSettled } from './lib.js';
 import {
-    VERSION, LOG, BASE_URL, CACHE_KEY, SEEN_KEY, CHUNK, DEFAULTS, ctx, settings, saveSettings, esc, toast, wait, errText, lsGet, lsSet, cab, st,
+    VERSION, LOG, BASE_URL, CACHE_KEY, SEEN_KEY, CHUNK, DEFAULTS, ctx, settings, saveSettings, esc, toast, wait, errText, lsGet, lsSet, loadChatCache, saveChatCache, cab, st,
     charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
     sheet, sheetConfirm, sheetPrompt, sheetPick,
 } from './core.js';
@@ -102,36 +102,38 @@ function storyOf(text, rx, opts) {
     return hidden && hidden.length >= plain.length * 0.5 ? hidden : plain;
 }
 
-function normalize(x, rx = t => t) {
+/**
+ * A chat from the server as the list keeps it. `ents` looks characters and groups up by id (a
+ * linear search per chat is too slow with thousands of cards). `old` is the cached row of the
+ * same chat: unchanged, its cleaned preview is kept and the message is not cleaned again.
+ */
+function normalize(x, rx, ents, old = null) {
     const c = ctx();
     const file = String(x?.file_name ?? '');
     const chatId = file.replace(/\.jsonl$/i, '');
     if (!chatId) return null;
     let type, entity, entityName;
     if (x.group) {
-        const g = groupOf(x.group);
+        const g = ents.groups.get(String(x.group));
         if (!g) return null;
         type = 'group'; entity = String(g.id); entityName = g.name;
     } else {
-        const ch = charOf(x.avatar);
+        const ch = ents.chars.get(x.avatar);
         if (!ch) return null;
         type = 'character'; entity = ch.avatar; entityName = ch.name;
     }
     const meta = x.chat_metadata && typeof x.chat_metadata === 'object' ? x.chat_metadata : {};
     const mh = meta.memory_hub;
     const count = Number(x.chat_items) || 0;
-    const raw = String(x.mes ?? '');
-    const preview = count && !/^\[The (chat|message) is empty\]$/.test(raw)
-        ? clip(storyOf(raw, rx, { avatar: type === 'character' ? entity : null, name: entityName }).replace(/\n{2,}/g, '\n'), 1200) : '';
     const persona = typeof meta.persona === 'string' && meta.persona ? meta.persona : null;
-    return {
+    const row = {
         key: `${type === 'group' ? 'g' : 'c'}:${entity}:${chatId}`,
         type, entity, entityName, chatId,
         count,
         last: toMs(x.last_mes, c.timestampToMoment),
         size: String(x.file_size ?? ''),
-        preview,
-        noStory: !preview && count > 0 && !!raw.trim() && !/^\[The (chat|message) is empty\]$/.test(raw),
+        preview: '',
+        noStory: false,
         persona,
         personaName: persona ? personaName(persona) : '',
         chain: Array.isArray(mh?.chain) ? mh.chain.map(String) : [],
@@ -139,6 +141,45 @@ function normalize(x, rx = t => t) {
         prev: typeof meta.chat_browser?.prev === 'string' ? meta.chat_browser.prev : null,
         mainChat: typeof meta.main_chat === 'string' && meta.main_chat ? meta.main_chat : null,
     };
+    if (old && old.key === row.key && chatSig(old) === chatSig(row)) {
+        row.preview = old.preview;
+        row.noStory = old.noStory;
+        return row;
+    }
+    const raw = String(x.mes ?? '');
+    const empty = /^\[The (chat|message) is empty\]$/.test(raw);
+    row.preview = count && !empty ? clip(storyOf(raw, rx, { avatar: type === 'character' ? entity : null, name: entityName }).replace(/\n{2,}/g, '\n'), 1200) : '';
+    row.noStory = !row.preview && count > 0 && !!raw.trim() && !empty;
+    row.cleaned = true; // for normalizeAll's pacing; not kept
+    return row;
+}
+
+/** Characters and groups by id, built once per load. */
+function entityMaps() {
+    const c = ctx();
+    return {
+        chars: new Map((c.characters || []).filter(ch => ch?.avatar).map(ch => [ch.avatar, ch])),
+        groups: new Map((c.groups || []).filter(g => g?.id != null).map(g => [String(g.id), g])),
+    };
+}
+
+/**
+ * Every row through normalize, a batch at a time: cleaning thousands of messages in one go
+ * froze the screen for seconds on a phone. Between batches the page gets to draw and respond.
+ */
+async function normalizeAll(raw, rx, reuse) {
+    const ents = entityMaps();
+    const out = [];
+    let cleaned = 0;
+    for (const x of Array.isArray(raw) ? raw : []) {
+        const file = String(x?.file_name ?? '').replace(/\.jsonl$/i, '');
+        const key = x?.group ? `g:${x.group}:${file}` : `c:${x?.avatar}:${file}`;
+        const row = normalize(x, rx, ents, reuse.get(key));
+        if (!row) continue;
+        if (row.cleaned) { delete row.cleaned; if (++cleaned % 150 === 0) await wait(0); }
+        out.push(row);
+    }
+    return out;
 }
 
 /** SillyTavern before 1.13 has no /api/chats/recent: ask per character and per group chat. */
@@ -165,42 +206,120 @@ async function fetchOldWay() {
     return out;
 }
 
-async function fetchChats() {
-    let raw;
+/**
+ * The newest-modified `max` chats (0 = all of them). SillyTavern reads every file it returns to
+ * the end to count the messages, so asking for all of them is the slow part with many chats.
+ * null: this SillyTavern has no such endpoint.
+ */
+async function fetchRecent(max) {
     try {
-        raw = await (await post('/api/chats/recent', { metadata: true })).json();
+        const raw = await (await post('/api/chats/recent', max ? { metadata: true, max } : { metadata: true })).json();
+        return Array.isArray(raw) ? raw : [];
     } catch (e) {
-        if (e.status !== 404) throw e;
-        raw = await fetchOldWay();
+        if (e.status === 404) return null;
+        throw e;
     }
+}
+
+const FIRST_WINDOW = 40;     // chats asked for on a quick refresh
+const MAX_WINDOW = 2000;     // past this, a full scan is the cheaper way
+const FULL_EVERY = 24 * 3_600_000; // a full scan at least once a day: chats deleted elsewhere, changed cards
+
+/** Which display scripts and cleaning made the cached previews: when this changes, they are made again. */
+function previewKey() {
+    try {
+        const list = regex?.base?.() ?? [];
+        return `${VERSION}|${list.map(x => `${x.id}:${x.disabled ? 0 : 1}:${x.findRegex}:${x.replaceString ?? ''}:${(x.placement || []).join(',')}`).join('|')}`;
+    } catch { return VERSION; }
+}
+
+/**
+ * The chat list from the server: a quick refresh (only the chats changed since the cache) when
+ * it can, or every chat. Returns { list, complete, key }.
+ */
+async function fetchChats(full) {
     await loadRegex();
     const rx = displayRegexer();
-    return (Array.isArray(raw) ? raw : []).map(x => normalize(x, rx)).filter(Boolean);
+    const key = previewKey();
+    if (key !== data.rxKey) full = true; // previews made with other scripts: clean everything again
+    const reuse = new Map(data.byKey);
+    if (!full) {
+        for (let asked = FIRST_WINDOW; asked <= MAX_WINDOW; asked *= 5) {
+            const raw = await fetchRecent(asked);
+            if (!raw) break; // an old SillyTavern: the full way
+            const fresh = await normalizeAll(raw, rx, reuse);
+            // a server that ignored max returned everything
+            const state = raw.length > asked ? 'complete' : windowSettled(fresh, data.byKey, asked);
+            if (state === 'complete') return { list: fresh, complete: true, key };
+            if (state === 'settled') {
+                const changed = fresh.filter(r => { const old = data.byKey.get(r.key); return !old || chatSig(old) !== chatSig(r) || old.preview !== r.preview; });
+                return { list: changed.length ? mergeChats(data.chats, fresh) : data.chats, complete: false, changed, key };
+            }
+            for (const r of fresh) reuse.set(r.key, r); // the next, bigger window keeps what was cleaned
+        }
+    }
+    const raw = (await fetchRecent(0)) ?? await fetchOldWay();
+    return { list: await normalizeAll(raw, rx, reuse), complete: true, key };
+}
+
+/** Rows of characters or groups that no longer exist go; renamed ones get their new name. */
+function reconcile(list) {
+    const { chars, groups } = entityMaps();
+    const dropped = [], renamed = [];
+    if (!chars.size && !groups.size) return { list, dropped, renamed }; // SillyTavern has not loaded its cards yet
+    const kept = list.filter(c => {
+        const e = c.type === 'group' ? groups.get(c.entity) : chars.get(c.entity);
+        if (!e) { dropped.push(c.key); return false; }
+        if (e.name && e.name !== c.entityName) { c.entityName = e.name; renamed.push(c); }
+        return true;
+    });
+    return { list: dropped.length ? kept : list, dropped, renamed };
 }
 
 function setChats(list) {
+    data.rev++;
     data.chats = list;
     data.byKey = new Map(list.map(x => [x.key, x]));
 }
 
-/** Reload the list from the server (one at a time; callers share the running load). */
-function reload() {
-    if (data.loading) return data.loading;
+/** Save to IndexedDB: `touched` = keys of the rows that changed or went (null after a full read: all). */
+function saveCache(touched = null) {
+    saveChatCache({ v: 2, at: data.at, fullAt: data.fullAt, rxKey: data.rxKey }, data.chats, touched);
+}
+
+/**
+ * Bring the list up to date (callers share the running load). `full`: read every chat again —
+ * after a rename or a Clean Sync, where a quick refresh would miss chats that went away.
+ */
+function reload({ full = false } = {}) {
+    if (full) data.wantFull = true;
+    if (data.loading) {
+        // a full scan asked for during a quick one runs right after it
+        return full && !data.loadingFull ? data.loading.then(() => reload({ full: true })) : data.loading;
+    }
     ui.setLoading(true);
     data.loading = (async () => {
         try {
-            const list = await fetchChats();
-            setChats(list);
+            await cacheReady;
+            const doFull = data.wantFull || !data.fullAt || !data.chats.length || Date.now() - data.fullAt > FULL_EVERY;
+            data.wantFull = false;
+            data.loadingFull = doFull;
+            const r = await fetchChats(doFull);
+            const rec = reconcile(r.list);
+            if (rec.list !== data.chats) setChats(rec.list);
             data.at = Date.now();
+            if (r.complete) data.fullAt = data.at;
+            data.rxKey = r.key;
             data.error = '';
             baselineSeen();
-            lsSet(CACHE_KEY, { at: data.at, chats: list });
+            saveCache(r.complete ? null : [...r.changed.map(c => c.key), ...rec.renamed.map(c => c.key), ...rec.dropped]);
         } catch (e) {
             console.error(LOG, e);
             data.error = errText(e);
             toast.err(`โหลดรายชื่อแชทไม่สำเร็จ: ${data.error}`);
         } finally {
             data.loading = null;
+            data.loadingFull = false;
             ui.setLoading(false);
             ui.render();
             updateLauncherBadge();
@@ -209,11 +328,25 @@ function reload() {
     return data.loading;
 }
 
-function loadCache() {
-    if (data.chats.length) return;
-    const c = lsGet(CACHE_KEY, null);
-    if (Array.isArray(c?.chats)) { setChats(c.chats); data.at = c.at || 0; }
-}
+/**
+ * The list saved last time, shown at once while the server is asked. Kept in IndexedDB; a list
+ * from an older version in localStorage is moved over once (and the space freed).
+ */
+const cacheReady = (async () => {
+    const { meta, rows } = await loadChatCache();
+    let c = meta && rows.length ? { ...meta, chats: rows } : null;
+    const old = lsGet(CACHE_KEY, null);
+    if (old) {
+        if (!c && Array.isArray(old.chats)) c = { at: old.at || 0, fullAt: old.at || 0, rxKey: null, chats: old.chats };
+        try { localStorage.removeItem(CACHE_KEY); } catch { /* blocked */ }
+    }
+    if (Array.isArray(c?.chats) && !data.chats.length) {
+        setChats(c.chats);
+        data.at = c.at || 0;
+        data.fullAt = c.fullAt || 0;
+        data.rxKey = c.rxKey ?? null;
+    }
+})().catch(e => console.warn(LOG, 'cache', e));
 
 // ---------------------------------------------------------------- unread (per device)
 //
@@ -416,7 +549,7 @@ async function afterRename({ avatarId, groupId, oldFileName, newFileName } = {},
     if (s.pins[oldKey]) { s.pins[newKey] = s.pins[oldKey]; delete s.pins[oldKey]; saveSettings(); }
     if (seen.map[oldKey] !== undefined) { seen.map[newKey] = seen.map[oldKey]; delete seen.map[oldKey]; saveSeen(); }
     const item = data.byKey.get(oldKey);
-    if (item) { data.byKey.delete(oldKey); item.key = newKey; item.chatId = newId; data.byKey.set(newKey, item); }
+    if (item) { data.byKey.delete(oldKey); item.key = newKey; item.chatId = newId; data.byKey.set(newKey, item); data.rev++; }
     if (own) { try { await cab()?.onChatRenamed?.({ avatarId, groupId, oldFileName, newFileName }); } catch (e) { console.warn(LOG, e); } }
     // Chats that point at the old name (story parts, branches) now point at the new one.
     const refs = data.chats.filter(c => c.type === type && c.entity === entity && c.key !== newKey
@@ -427,6 +560,7 @@ async function afterRename({ avatarId, groupId, oldFileName, newFileName } = {},
             c.chain = c.chain.map(id => (id === oldId ? newId : id));
             if (c.prev === oldId) c.prev = newId;
             if (c.mainChat === oldId) c.mainChat = newId;
+            data.rev++;
         } catch (e) {
             console.warn(LOG, 'relink', c.key, e);
             toast.warn(`แก้ลิงก์ตอนต่อในแชท "${c.chatId}" ไม่สำเร็จ: ${errText(e)}`);
@@ -472,6 +606,7 @@ async function deleteChat(x) {
     delete seen.map[x.key];
     saveSeen();
     setChats(data.chats.filter(c2 => c2.key !== x.key));
+    saveCache([x.key]);
 }
 
 function togglePin(keys, on) {
@@ -493,6 +628,7 @@ async function setPrev(x, prevId) {
         return true;
     });
     x.prev = prevId || null;
+    data.rev++;
 }
 
 /** Older SillyTavern pins (Recent Chats on the welcome screen) — copied in once. */
@@ -550,6 +686,10 @@ Object.assign(ui, {
     noteOpen: false,    // creator's note shown in full
     animate: false,     // tiles fade in one after another on the next grid render (not on every refresh)
     imgObserver: null,
+    // pages
+    page: 1,            // page on screen (grid or list)
+    pageKey: '',        // what the page counts through: a new search, filter, sort or page size starts at page 1
+    pageInfo: null,     // { page, pages, total, kind: 'cards' | 'chats' } of the grid or list on screen
 
     setLoading(on) {
         this.root?.querySelector('.cb_spin')?.toggleAttribute('hidden', !on);
@@ -567,18 +707,24 @@ Object.assign(ui, {
             // every character and group, also those without a chat yet
             const entities = galleryEntities();
             this.cards = buildCards(data.chats, { ...opts, sort: sortFor(s, true), extraText: cardSearchText, entities, tags: s.galleryTags, fav: s.galleryFav });
+            // the card page keeps the grid's page, so "back" lands where it was
+            if (!this.card) this.turnTo('cards', this.cards.length, s);
             // A card page lists every chat of that card, whatever the grid is filtered by.
             if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf, entities })[0] ?? null;
             if (!card) this.card = null;
             const chatSort = sortFor(s, false);
             this.entries = card
-                ? buildEntries(data.chats, { sort: chatSort === 'character' ? 'recent' : chatSort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf })
+                ? buildEntries(data.chats, { sort: chatSort === 'character' ? 'recent' : chatSort, merge: s.merge, entity: this.card, pins: s.pins, unreadOf, stories: linkInfo })
                 : [];
             this.shownN = card ? card.count : this.cards.reduce((n, x) => n + x.count, 0);
         } else {
             this.card = null;
-            this.entries = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge });
-            this.shownN = this.entries.filter(e => e.kind === 'chat').length;
+            const all = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge, stories: linkInfo });
+            this.shownN = all.filter(e => e.kind === 'chat').length;
+            const pe = pageEntries(all, s.pageChats, this.pageFor('chats', s));
+            this.page = pe.page;
+            this.pageInfo = { page: pe.page, pages: pe.pages, total: this.shownN, kind: 'chats' };
+            this.entries = pe.entries;
         }
         this.root.classList.toggle('cb_oncard', !!card);
         this.root.querySelector('.cb_cardnav').hidden = !card;
@@ -598,18 +744,70 @@ Object.assign(ui, {
             if (anim) this.animate = false;
             const size = s.gallerySize === 'compact' ? 'compact' : 'large';
             const sizeBtn = (id, icon, tip) => `<button data-gsize="${id}" class="${size === id ? 'cb_on' : ''}" title="${tip}" aria-label="${tip}"><i class="${icon}"></i></button>`;
+            const pg = this.pageInfo;
+            const r = pageRange(this.cards.length, s.pageCards, pg.page);
+            const count = pg.pages > 1 ? `${r.from + 1}–${r.to} จาก ${this.cards.length.toLocaleString('th-TH')} การ์ด` : `${this.cards.length.toLocaleString('th-TH')} การ์ด`;
             list.innerHTML = this.cards.length
-                ? `<div class="cb_gridbar"><span>${this.cards.length} การ์ด</span><div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div>
-                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.map((x, i) => this.tileHtml(x, i)).join('')}</div>`
+                ? `<div class="cb_gridbar"><span>${count}</span><div class="rv_pgtools">${this.pagerHtml(true)}<div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div></div>
+                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.slice(r.from, r.to).map((x, i) => this.tileHtml(x, i)).join('')}</div>
+                    ${this.pagerHtml()}`
                 : this.emptyHtml();
             this.watchCovers();
         } else if (!this.entries.length) {
             list.innerHTML = this.emptyHtml();
         } else {
+            list.insertAdjacentHTML('beforeend', this.listBarHtml());
             this.more();
         }
         list.scrollTop = top;
         this.renderSelbar();
+    },
+
+    /** The page to show of `kind`: page 1 again once the search, filters, sort or page size changed. */
+    pageFor(kind, s) {
+        const size = kind === 'cards' ? s.pageCards : s.pageChats;
+        const key = [kind, size, this.query, this.filter, this.entity, this.persona, sortFor(s, kind === 'cards'), s.merge, s.galleryTags.join('\u0001'), s.galleryFav].join('\u0000');
+        if (key !== this.pageKey) { this.pageKey = key; this.page = 1; }
+        return this.page;
+    },
+
+    /** The grid's page: which page and how many, clamped to what there is now. */
+    turnTo(kind, total, s) {
+        const r = pageRange(total, s.pageCards, this.pageFor(kind, s));
+        this.page = r.page;
+        this.pageInfo = { page: r.page, pages: r.pages, total, kind };
+    },
+
+    /**
+     * Pager. `top`: ‹ 3/42 › and how many per page, above the grid or list (the size picker only once
+     * there are more items than the smallest page). At the end: ‹ หน้า 3 / 42 ›, only with more than one page.
+     */
+    pagerHtml(top = false) {
+        const p = this.pageInfo;
+        if (!p) return '';
+        const s = settings();
+        const sizes = PAGE_SIZES[p.kind];
+        const size = p.kind === 'cards' ? s.pageCards : s.pageChats;
+        const nav = p.pages > 1 ? `<div class="rv_pgnav">
+                <button class="cb_iconbtn" data-pg="-1"${p.page > 1 ? '' : ' disabled'} title="หน้าก่อน" aria-label="หน้าก่อน"><i class="fa-solid fa-chevron-left"></i></button>
+                <button class="rv_pgnum" data-pgjump="1" title="ไปหน้าที่…" aria-label="หน้า ${p.page} จาก ${p.pages} — แตะเพื่อเลือกหน้า">${top ? '' : 'หน้า '}${p.page}<span>/${p.pages}</span></button>
+                <button class="cb_iconbtn" data-pg="1"${p.page < p.pages ? '' : ' disabled'} title="หน้าถัดไป" aria-label="หน้าถัดไป"><i class="fa-solid fa-chevron-right"></i></button>
+            </div>` : '';
+        if (!top) return nav ? `<div class="rv_pager">${nav}</div>` : '';
+        if (p.total <= sizes[1] && !size) return nav;
+        const unit = p.kind === 'cards' ? 'การ์ด' : 'แชท';
+        const opts = sizes.map(n => `<option value="${n}"${n === size ? ' selected' : ''}>${n ? `${n} ต่อหน้า` : 'แสดงทั้งหมด'}</option>`).join('');
+        return `${nav}<select data-pgsize="${p.kind}" class="rv_pgselect" aria-label="จำนวน${unit}ต่อหน้า" title="จำนวน${unit}ต่อหน้า">${opts}</select>`;
+    },
+
+    /** The bar above the list: how many chats, ‹ › and per page (nothing for a short list). */
+    listBarHtml() {
+        const p = this.pageInfo;
+        const pager = this.pagerHtml(true);
+        if (!p || !pager) return '';
+        const r = pageRange(p.total, settings().pageChats, p.page);
+        const count = p.pages > 1 ? `${r.from + 1}–${r.to} จาก ${p.total.toLocaleString('th-TH')} แชท` : `${p.total.toLocaleString('th-TH')} แชท`;
+        return `<div class="rv_pagetop"><span>${count}</span><div class="rv_pgtools">${pager}</div></div>`;
     },
 
     emptyHtml() {
@@ -645,6 +843,8 @@ Object.assign(ui, {
                 html.push(this.rowHtml(e));
             }
         }
+        // the list's last rows end with the pager (on the card page the list is that card's chats: no pages)
+        if (to === this.entries.length && !this.card) html.push(this.pagerHtml());
         list.insertAdjacentHTML('beforeend', html.join(''));
         this.shown = to;
         if (to < this.entries.length) {
@@ -661,7 +861,7 @@ Object.assign(ui, {
         const ava = e.head ? this.avatarHtml(e.head, 'cb_sec_ava') : `<span class="cb_sec_icon"><i class="fa-solid ${e.id === 'pinned' ? 'fa-thumbtack' : e.id === 'all' ? 'fa-clock' : 'fa-folder'}"></i></span>`;
         const foldable = !!e.entity;
         return `<div class="cb_section${foldable ? ' cb_foldable' : ''}${folded ? ' cb_folded' : ''}" data-sec="${esc(e.id)}"${foldable ? ' role="button" tabindex="0"' : ''}>
-            ${ava}<span class="cb_sec_title">${esc(e.title)}</span><span class="cb_sec_count">${e.count}</span>
+            ${ava}<span class="cb_sec_title">${esc(e.title)}${e.cont ? '<small class="rv_cont"> (ต่อ)</small>' : ''}</span><span class="cb_sec_count">${e.count}</span>
             ${e.unread ? `<span class="cb_badge">${e.unread}</span>` : ''}
             ${foldable ? `<span class="cb_sec_only" data-only="${esc(e.entity)}" title="ดูเฉพาะ ${esc(e.title)}"><i class="fa-solid fa-filter"></i></span><i class="fa-solid fa-chevron-down cb_chev"></i>` : ''}
         </div>`;
@@ -872,12 +1072,24 @@ Object.assign(ui, {
 });
 Object.assign(ui, galleryUi);
 
-let linkInfo = new Map(); // key → story info, refreshed with every render
+let linkInfo = new Map(); // key → story info, made again when the list or a link in it changed
+let linkRev = -1;
 const _render = ui.render.bind(ui);
 ui.render = function () {
-    linkInfo = linkStories(data.chats);
+    if (linkRev !== data.rev) { linkInfo = linkStories(data.chats); linkRev = data.rev; }
     _render();
 };
+
+/** Cards or chats per page (0 = all), from the pager or the settings panel. */
+function setPageSize(kind, n) {
+    const s = settings();
+    const key = kind === 'cards' ? 'pageCards' : 'pageChats';
+    s[key] = PAGE_SIZES[kind]?.includes(n) ? n : 0;
+    saveSettings();
+    const box = document.getElementById(kind === 'cards' ? 'cb_set_pagecards' : 'cb_set_pagechats');
+    if (box) box.value = String(s[key]);
+    if (ui.root) ui.render();
+}
 
 function chatFromRow(row) {
     return row ? data.byKey.get(row.dataset.key) : null;
@@ -992,7 +1204,6 @@ function openBrowser() {
     ui.openedAt = Date.now();
     ui.query = '';
     ui.animate = true;
-    loadCache();
     importStPins();
     const s = settings();
     const root = document.createElement('div');
@@ -1054,6 +1265,8 @@ function openBrowser() {
         reportError('วาด Reverie ไม่ได้', err);
     }
     if (!matchMedia('(pointer: coarse)').matches) root.querySelector('.cb_search').focus();
+    // the saved list as soon as it is read, then the changes from the server
+    if (!data.at) cacheReady.then(() => { if (ui.root === root && data.at) ui.render(); });
     reload();
 }
 
@@ -1218,8 +1431,27 @@ function wireBrowser(root) {
         e.stopImmediatePropagation();
     }, true);
 
+    // pages: ‹ ›, tap the page number to pick a page, and how many per page
+    const goPage = p => { ui.page = p; ui.animate = false; ui.render(); list.scrollTop = 0; };
+    list.addEventListener('change', e => {
+        const sel = e.target.closest?.('[data-pgsize]');
+        if (!sel) return;
+        setPageSize(sel.dataset.pgsize, Number(sel.value));
+        list.scrollTop = 0;
+    });
+
     list.addEventListener('click', async e => {
         const t = e.target;
+        const pgBtn = t.closest('[data-pg]');
+        if (pgBtn) { if (!pgBtn.disabled) goPage(ui.page + Number(pgBtn.dataset.pg)); return; }
+        if (t.closest('[data-pgjump]')) {
+            const pages = ui.pageInfo?.pages ?? 1;
+            const v = await sheetPrompt({ title: 'ไปหน้าที่', value: String(ui.page), ok: 'ไป', hint: `พิมพ์เลขหน้า 1–${pages}` });
+            const n = parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10);
+            if (n && ui.root === root) goPage(Math.min(pages, Math.max(1, n)));
+            return;
+        }
+        if (t.closest('.rv_pager, .rv_pgselect')) return;
         if (t.closest('[data-clearfilters]')) { s.galleryTags = []; s.galleryFav = false; saveSettings(); ui.render(); return; }
         const tile = t.closest('.cb_tile');
         if (tile) {
@@ -1564,7 +1796,7 @@ async function menuAction(act, c) {
         const name = await sheetPrompt({ title: 'เปลี่ยนชื่อแชท', value: c.chatId, ok: 'เปลี่ยนชื่อ', hint: `${esc(c.entityName)} · แชทที่อ้างถึงชื่อนี้ (ตอนต่อ กิ่ง) จะถูกแก้ตาม${cab()?.dropboxConnected?.() ? ' · ไฟล์ใน Dropbox ย้ายไปชื่อใหม่ และเครื่องอื่นเปลี่ยนตามตอนซิงค์' : ''}` });
         if (name == null) return;
         const done = await renameChat(c, name);
-        if (done) { toast.ok(`เปลี่ยนชื่อเป็น "${done}" แล้ว`); ui.render(); reload(); }
+        if (done) { toast.ok(`เปลี่ยนชื่อเป็น "${done}" แล้ว`); ui.render(); reload({ full: true }); }
         return;
     }
     if (act === 'delete') {
@@ -1913,7 +2145,7 @@ async function cleanApplyStep(api, plan) {
         return;
     }
     ui.busy = false;
-    reload();
+    reload({ full: true }); // chats were deleted: a quick refresh would not see them go
     api.setTitle('Clean Sync — เสร็จแล้ว');
     const until = fmtDate(Date.now() + 30 * 86_400_000);
     api.body.innerHTML = `
@@ -1945,7 +2177,7 @@ function wireRestore(api, list) {
             x.restored = Date.now();
             b.outerHTML = '<span class="cb_restored"><i class="fa-solid fa-check"></i>กู้แล้ว</span>';
             toast.ok(r.created ? `กู้ "${x.chatId}" กลับมาแล้ว ทั้งในเครื่องนี้และ Dropbox` : `กู้ "${x.chatId}" กลับมาใน Dropbox แล้ว`);
-            reload();
+            reload({ full: true }); // a restored file keeps its old date: only a full read finds it
         } catch (err) {
             b.disabled = false;
             b.innerHTML = '<i class="fa-solid fa-rotate-left"></i>กู้คืน';
@@ -2365,6 +2597,15 @@ function renderSettingsPanel() {
                         <option value="tap">แตะ = Reverie</option>
                     </select>
                 </div>
+                <div class="cb_setrow">
+                    <span>การ์ดต่อหน้า</span>
+                    <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
+                </div>
+                <div class="cb_setrow">
+                    <span>แชทต่อหน้า</span>
+                    <select id="cb_set_pagechats" class="text_pole">${PAGE_SIZES.chats.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
+                </div>
+                <small class="cb_sethint">มีการ์ดหรือแชทเยอะมาก แบ่งเป็นหน้า ๆ จะไม่ต้องเลื่อนยาวและเปิดเร็วขึ้น · ปรับได้ที่แถบบนสุดของรายการใน Reverie ด้วย</small>
                 <small class="cb_sethint">ปุ่มการ์ดตัวละคร (<i class="fa-solid fa-address-card"></i>) บนแถบด้านบน · <b>ค้าง = Reverie</b> แตะเปิด Card ของ ST ตามเดิม กดค้างเปิด Reverie · <b>แตะ = Reverie</b> กลับกัน แตะเปิด Reverie กดค้างเปิด Card · ตอนแผง Card เปิดอยู่ แตะเพื่อปิดได้ตามปกติ</small>
                 <details class="cb_look">
                     <summary>หน้าตาปุ่มลอย</summary>
@@ -2377,6 +2618,7 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns">
                     <div id="cb_set_resetpos" class="menu_button"><i class="fa-solid fa-crosshairs"></i> รีเซ็ตตำแหน่งปุ่มลอย</div>
                     <div id="cb_set_readall" class="menu_button"><i class="fa-solid fa-check-double"></i> ทุกแชทอ่านแล้ว</div>
+                    <div id="cb_set_rescan" class="menu_button" title="ปกติ Reverie ถามเซิร์ฟเวอร์เฉพาะแชทที่เปลี่ยน และอ่านทุกแชทวันละครั้ง กดนี้ถ้ารายการดูไม่ตรง"><i class="fa-solid fa-arrows-rotate"></i> โหลดรายการแชทใหม่ทั้งหมด</div>
                     <div id="cb_set_diag" class="menu_button" title="ทดลองเปิด Reverie แล้ววัดว่าเกิดอะไรขึ้น ได้รายงานไว้คัดลอกส่งให้คนแก้"><i class="fa-solid fa-stethoscope"></i> ตรวจปัญหา</div>
                 </div>
                 <div id="cb_diagbox" class="cb_diagbox" hidden>
@@ -2404,11 +2646,21 @@ function renderSettingsPanel() {
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
     $('cb_set_cardbtn').value = cardMode();
+    $('cb_set_pagecards').value = String(s.pageCards);
+    $('cb_set_pagechats').value = String(s.pageChats);
+    $('cb_set_pagecards').addEventListener('change', e => setPageSize('cards', Number(e.target.value)));
+    $('cb_set_pagechats').addEventListener('change', e => setPageSize('chats', Number(e.target.value)));
     $('cb_set_cardbtn').addEventListener('change', e => { s.cardButton = e.target.value; saveSettings(); wireCardButton(); });
     $('cb_set_open').addEventListener('click', () => openBrowser());
     $('cb_set_resetpos').addEventListener('click', () => { s.launcherPos = { ...DEFAULTS.launcherPos }; saveSettings(); if (!s.launcher) { s.launcher = true; $('cb_set_launcher').checked = true; renderLauncher(); } placeLauncher(); });
     renderLookEditor($('cb_look_body'));
     renderTopEditor($('cb_top_body'));
+    $('cb_set_rescan').addEventListener('click', async () => {
+        const b = $('cb_set_rescan');
+        if (b.classList.contains('cb_busy')) return;
+        b.classList.add('cb_busy');
+        try { await reload({ full: true }); toast.ok(`โหลดใหม่แล้ว ${data.chats.length.toLocaleString('th-TH')} แชท`); } finally { b.classList.remove('cb_busy'); }
+    });
     $('cb_set_readall').addEventListener('click', async () => {
         if (!data.at) await reload();
         for (const c of data.chats) seen.map[c.key] = c.count;
@@ -2706,10 +2958,28 @@ let refreshTimer = null;
  * Something changed on the server: refresh quietly. Closed browser: only when `background`
  * (a sync brought chats in — the launcher's unread count should show it); otherwise on next open.
  */
-function staleSoon(delay = 800, { background = false } = {}) {
+function staleSoon(delay = 800, { background = false, full = false } = {}) {
     clearTimeout(refreshTimer);
+    if (full) data.wantFull = true; // also on the next open, if the browser is closed now
     if (!ui.root && !background) return;
     refreshTimer = setTimeout(() => reload(), ui.root ? delay : Math.max(delay, 3000));
+}
+
+/** A chat deleted in SillyTavern: off the list now (a quick refresh cannot see a file that is gone). */
+function dropDeleted(name) {
+    const id = String(name ?? '').replace(/\.jsonl$/i, '');
+    if (!id) { data.wantFull = true; return; }
+    const cur = ctx();
+    const ent = cur.groupId ? `g:${cur.groupId}:` : cur.characters?.[cur.characterId] ? `c:${cur.characters[cur.characterId].avatar}:` : null;
+    // the chat of the open character or group; any chat of that name when it is not known
+    const gone = data.chats.filter(c => c.chatId === id && (!ent || c.key.startsWith(ent)));
+    const drop = gone.length ? gone : data.chats.filter(c => c.chatId === id);
+    if (!drop.length) return;
+    const keys = new Set(drop.map(c => c.key));
+    setChats(data.chats.filter(c => !keys.has(c.key)));
+    saveCache(keys);
+    if (ui.root) ui.render();
+    updateLauncherBadge();
 }
 
 function wireEvents() {
@@ -2718,8 +2988,10 @@ function wireEvents() {
     const onMsg = () => { markCurrentSeen(); if (ui.root) ui.render(); };
     for (const ev of [E.MESSAGE_SENT, E.MESSAGE_RECEIVED, E.MESSAGE_DELETED, E.MESSAGE_SWIPED].filter(Boolean)) eventSource.on(ev, onMsg);
     if (E.CHAT_CHANGED) eventSource.on(E.CHAT_CHANGED, () => { markCurrentSeen(); if (ui.root) ui.render(); });
-    if (E.CHAT_RENAMED) eventSource.on(E.CHAT_RENAMED, ev => { afterRename(ev).catch(e => console.warn(LOG, e)); staleSoon(); });
-    for (const ev of [E.CHAT_DELETED, E.GROUP_CHAT_DELETED, E.CHAT_CREATED, E.GROUP_CHAT_CREATED].filter(Boolean)) eventSource.on(ev, () => staleSoon());
+    // a renamed file keeps its old date, so only a full read finds it under the new name
+    if (E.CHAT_RENAMED) eventSource.on(E.CHAT_RENAMED, ev => { afterRename(ev).catch(e => console.warn(LOG, e)); staleSoon(800, { full: true }); });
+    for (const ev of [E.CHAT_DELETED, E.GROUP_CHAT_DELETED].filter(Boolean)) eventSource.on(ev, name => { dropDeleted(name); staleSoon(); });
+    for (const ev of [E.CHAT_CREATED, E.GROUP_CHAT_CREATED].filter(Boolean)) eventSource.on(ev, () => staleSoon());
     if (E.APP_READY) eventSource.on(E.APP_READY, () => { addWandItem(); renderTopbar(); });
     document.addEventListener('chatautobackup:synced', () => staleSoon(300, { background: true }));
     // Keep the Sync button's state live while the panel is open.
@@ -2774,8 +3046,7 @@ async function init() {
     addWandItem();
     registerCommand();
     wireEvents();
-    loadCache();
-    updateLauncherBadge();
+    cacheReady.then(updateLauncherBadge);
     setTimeout(() => { reload().catch(() => {}); }, 4000); // badge counts; after the app has settled
     setTimeout(checkForNewVersion, 5000);
     console.log(LOG, 'loaded', VERSION);
