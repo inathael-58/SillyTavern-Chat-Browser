@@ -1105,6 +1105,49 @@ const SCHEMES = [
     ['dark', 'fa-solid fa-moon', 'กลางคืน'],
 ];
 
+/** Hover on covers, picked in the settings panel. holo, tilt and spot follow the pointer. */
+const HOVERS = [
+    ['glint', 'แสงวาบ'],
+    ['holo', 'ฟอยล์รุ้ง'],
+    ['tilt', 'เอียงตามเมาส์'],
+    ['spot', 'สปอตไลต์'],
+    ['glow', 'ขอบเรืองแสง'],
+    ['bloom', 'สว่างนุ่ม'],
+    ['none', 'ไม่มี'],
+];
+const FOLLOWS_POINTER = new Set(['holo', 'tilt', 'spot']);
+const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
+function applyHover(root = ui.root) {
+    if (root) root.dataset.hover = hoverMode();
+}
+
+/** Where the mouse is on a cover, for the hover styles that follow it (one update per frame). */
+function wireHoverPointer(list) {
+    let frame = 0, last = null;
+    const reset = el => { el.style.removeProperty('--rx'); el.style.removeProperty('--ry'); };
+    list.addEventListener('pointermove', e => {
+        if (e.pointerType !== 'mouse' || !FOLLOWS_POINTER.has(hoverMode())) return;
+        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
+        if (!el) return;
+        last = { el, x: e.clientX, y: e.clientY };
+        frame ||= requestAnimationFrame(() => {
+            frame = 0;
+            const { el: t, x, y } = last;
+            const r = t.getBoundingClientRect();
+            const fx = clamp((x - r.left) / r.width, 0, 1), fy = clamp((y - r.top) / r.height, 0, 1);
+            t.style.setProperty('--mx', `${(fx * 100).toFixed(1)}%`);
+            t.style.setProperty('--my', `${(fy * 100).toFixed(1)}%`);
+            t.style.setProperty('--ry', `${((fx - 0.5) * 14).toFixed(2)}deg`);
+            t.style.setProperty('--rx', `${((0.5 - fy) * 14).toFixed(2)}deg`);
+        });
+    }, { passive: true });
+    // leaving a cover: it settles back flat
+    list.addEventListener('pointerout', e => {
+        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
+        if (el && !el.contains(e.relatedTarget)) reset(el);
+    }, { passive: true });
+}
+
 function applyScheme(root = ui.root) {
     if (!root) return;
     const s = settings();
@@ -1263,6 +1306,7 @@ function openBrowser() {
         fitViewport();
         root.dataset.view = s.view;
         applyScheme(root);
+        applyHover(root);
         wireBrowser(root);
         ui.render();
     } catch (err) {
@@ -1349,6 +1393,7 @@ function wireBrowser(root) {
     const list = root.querySelector('.cb_list');
     const search = root.querySelector('.cb_search');
     const clearq = root.querySelector('.cb_clearq');
+    wireHoverPointer(list);
 
     // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
     // with the card editor open, unsaved edits are asked about first
@@ -2611,6 +2656,11 @@ function renderSettingsPanel() {
                     </select>
                 </div>
                 <div class="cb_setrow">
+                    <span>เอฟเฟกต์ปกการ์ด</span>
+                    <select id="cb_set_hover" class="text_pole">${HOVERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
+                </div>
+                <small class="cb_sethint">ตอนชี้เมาส์ที่ปกการ์ดในแกลเลอรีและหน้าการ์ด (เฉพาะคอมที่ใช้เมาส์ บนจอสัมผัสไม่มี) ไม่มีแบบไหนขยายรูป · ปิดเองถ้าเปิด "ลดการเคลื่อนไหว" ในระบบ</small>
+                <div class="cb_setrow">
                     <span>การ์ดต่อหน้า</span>
                     <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
                 </div>
@@ -2659,6 +2709,8 @@ function renderSettingsPanel() {
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
     $('cb_set_cardbtn').value = cardMode();
+    $('cb_set_hover').value = hoverMode();
+    $('cb_set_hover').addEventListener('change', e => { s.hover = e.target.value; saveSettings(); applyHover(); });
     $('cb_set_pagecards').value = String(s.pageCards);
     $('cb_set_pagechats').value = String(s.pageChats);
     $('cb_set_pagecards').addEventListener('change', e => setPageSize('cards', Number(e.target.value)));

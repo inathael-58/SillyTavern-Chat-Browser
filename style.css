@@ -1726,32 +1726,109 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     .cb_sort button { padding: 0 4px !important; }
 }
 
-/* hover (mouse only): a glint of light sweeps across the picture once, as when a photo is tilted
-   toward a lamp — nothing grows or moves. Touch screens get no hover, so nothing sticks after a tap. */
-.cb_tile::after,
-.cb_heroimg::after {
+/* ---------------------------------------------------------------- hover on covers
+   Picked in Extensions → Reverie (data-hover on the panel). Mouse only: touch screens get no
+   hover, so nothing sticks after a tap. None of them makes the picture bigger. Off with Reduce Motion.
+   --mx / --my (pointer position) and --rx / --ry (tilt) are set by index.js for holo, tilt and spot. */
+.cb_tile, .cb_heroimg { --mx: 50%; --my: 50%; --rx: 0deg; --ry: 0deg; }
+.cb_tile::before, .cb_tile::after,
+.cb_heroimg::before, .cb_heroimg::after {
     content: '';
     position: absolute;
     inset: 0;
     z-index: 1;
+    border-radius: inherit;
     pointer-events: none;
-    background: linear-gradient(115deg, transparent 34%, rgba(255, 255, 255, 0.07) 42%, rgba(255, 255, 255, 0.4) 48%, rgba(255, 255, 255, 0.1) 53%, transparent 62%) no-repeat;
-    background-size: 300% 100%;
-    background-position: 100% 0;
-    mix-blend-mode: screen;
+    opacity: 0;
 }
-.cb_heroimg::after { border-radius: inherit; }
+/* badges and the name stay above the light; the glowing border goes over everything */
+.cb_tiletop, .cb_tileinfo { z-index: 2; }
+@property --rv-ang { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@keyframes rv_ang { to { --rv-ang: 360deg; } }
+
 @media (hover: hover) and (pointer: fine) {
-    .cb_tile:hover::after,
-    .cb_heroimg:hover::after { background-position: 0 0; transition: background-position 1.05s cubic-bezier(0.45, 0.05, 0.3, 1); }
-    .cb_tile:hover { box-shadow: 0 18px 34px -16px var(--cb-shadow), 0 0 0 1px color-mix(in srgb, var(--cb-fg) 26%, transparent); }
-    .cb_tile.cb_isopen:hover { box-shadow: 0 0 0 2.5px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
-    .cb_tile.cb_selected:hover { box-shadow: 0 0 0 3px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
+    .cb_root:not([data-hover="none"]) .cb_tile:hover { box-shadow: 0 18px 34px -16px var(--cb-shadow), 0 0 0 1px color-mix(in srgb, var(--cb-fg) 26%, transparent); }
+    .cb_root .cb_tile.cb_isopen:hover { box-shadow: 0 0 0 2.5px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
+    .cb_root .cb_tile.cb_selected:hover { box-shadow: 0 0 0 3px var(--cb-accent), 0 18px 34px -14px var(--cb-accent); }
+
+    /* แสงวาบ: a band of light sweeps across once */
+    [data-hover="glint"] :is(.cb_tile, .cb_heroimg)::after {
+        opacity: 1;
+        background: linear-gradient(115deg, transparent 34%, rgba(255, 255, 255, 0.07) 42%, rgba(255, 255, 255, 0.4) 48%, rgba(255, 255, 255, 0.1) 53%, transparent 62%) no-repeat;
+        background-size: 300% 100%;
+        background-position: 100% 0;
+        mix-blend-mode: screen;
+    }
+    [data-hover="glint"] :is(.cb_tile, .cb_heroimg):hover::after { background-position: 0 0; transition: background-position 1.05s cubic-bezier(0.45, 0.05, 0.3, 1); }
+
+    /* ฟอยล์รุ้ง: a holographic foil that shifts with the pointer */
+    [data-hover="holo"] :is(.cb_tile, .cb_heroimg)::after {
+        transition: opacity 0.35s;
+        mix-blend-mode: color-dodge;
+        background: repeating-linear-gradient(115deg, #ff5f9e 0%, #ffd36e 8%, #6effc6 16%, #6ec8ff 24%, #c78bff 32%, #ff5f9e 40%);
+        background-size: 300% 300%;
+        background-position: var(--mx) var(--my);
+        filter: saturate(1.2) brightness(0.7);
+    }
+    [data-hover="holo"] :is(.cb_tile, .cb_heroimg)::before {
+        transition: opacity 0.35s;
+        mix-blend-mode: overlay;
+        background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.75), transparent 45%);
+    }
+    [data-hover="holo"] :is(.cb_tile, .cb_heroimg):hover::after { opacity: 0.55; }
+    [data-hover="holo"] :is(.cb_tile, .cb_heroimg):hover::before { opacity: 1; }
+
+    /* เอียงตามเมาส์: the card leans toward the pointer, with a highlight where it points */
+    [data-hover="tilt"] :is(.cb_tile, .cb_heroimg):hover {
+        transform: perspective(700px) rotateX(var(--rx)) rotateY(var(--ry));
+        transition: transform 0.08s linear, box-shadow 0.28s;
+    }
+    [data-hover="tilt"] :is(.cb_tile, .cb_heroimg)::after {
+        transition: opacity 0.3s;
+        mix-blend-mode: soft-light;
+        background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.38), transparent 55%);
+    }
+    [data-hover="tilt"] :is(.cb_tile, .cb_heroimg):hover::after { opacity: 1; }
+
+    /* สปอตไลต์: the picture dims a little, a soft light follows the pointer */
+    [data-hover="spot"] :is(.cb_tile .cb_cover, .cb_heroimg > img, .cb_heroimg .cb_tcollage) { transition: filter 0.35s; }
+    [data-hover="spot"] :is(.cb_tile:hover .cb_cover, .cb_heroimg:hover > img, .cb_heroimg:hover .cb_tcollage) { filter: brightness(0.82); }
+    [data-hover="spot"] :is(.cb_tile, .cb_heroimg)::after {
+        transition: opacity 0.3s;
+        mix-blend-mode: screen;
+        background: radial-gradient(circle 140px at var(--mx) var(--my), rgba(255, 240, 220, 0.28), transparent 70%);
+    }
+    [data-hover="spot"] :is(.cb_tile, .cb_heroimg):hover::after { opacity: 1; }
+
+    /* ขอบเรืองแสง: a light in the accent colour runs around the edge */
+    [data-hover="glow"] :is(.cb_tile, .cb_heroimg)::before {
+        z-index: 4;
+        padding: 2px;
+        transition: opacity 0.35s;
+        background: conic-gradient(from var(--rv-ang), transparent 0 60%, var(--cb-accent) 75%, #fff 80%, var(--cb-accent) 85%, transparent 100%);
+        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+    }
+    [data-hover="glow"] :is(.cb_tile, .cb_heroimg):hover::before { opacity: 1; animation: rv_ang 2.4s linear infinite; }
+    [data-hover="glow"] .cb_tile:hover { box-shadow: 0 0 28px -6px var(--cb-accent), 0 18px 34px -16px var(--cb-shadow); }
+
+    /* สว่างนุ่ม: the picture brightens a little, with an accent ring */
+    [data-hover="bloom"] :is(.cb_tile .cb_cover, .cb_heroimg > img, .cb_heroimg .cb_tcollage) { transition: filter 0.45s ease; }
+    [data-hover="bloom"] :is(.cb_tile:hover .cb_cover, .cb_heroimg:hover > img, .cb_heroimg:hover .cb_tcollage) { filter: brightness(1.1) saturate(1.18); }
+    [data-hover="bloom"] :is(.cb_tile, .cb_heroimg)::after { transition: opacity 0.45s; background: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), transparent 40%); }
+    [data-hover="bloom"] :is(.cb_tile, .cb_heroimg):hover::after { opacity: 1; }
+    [data-hover="bloom"] .cb_tile:hover { box-shadow: 0 0 0 2px var(--cb-accent), 0 16px 32px -14px var(--cb-accent); }
+
+    /* picking cards: the card stays still */
+    .cb_selecting .cb_tile:hover { transform: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .cb_tile, .cb_card, .cb_heroimg, .cb_full, .cb_lightbox, .cb_lbimgs img { animation: none !important; transition: none !important; }
-    .cb_tile::after, .cb_heroimg::after { display: none; }
+    .cb_tile::before, .cb_tile::after, .cb_heroimg::before, .cb_heroimg::after { display: none; }
+    .cb_tile:hover, .cb_heroimg:hover { transform: none !important; }
+    .cb_tile:hover .cb_cover, .cb_heroimg:hover > img, .cb_heroimg:hover .cb_tcollage { filter: none !important; }
 }
 
 /* ---------------------------------------------------------------- pages */
@@ -1805,8 +1882,6 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 .rv_pgtools .rv_pgnum { height: 28px; padding: 0 10px !important; font-size: 0.85em; }
 .rv_pgtools .rv_pgnav .cb_iconbtn { width: 28px; height: 28px; }
 .rv_cont { font-weight: 500; color: var(--cb-muted); }
-/* badges and the name stay above the glint */
-.cb_tiletop, .cb_tileinfo { z-index: 2; }
 
 /* ---------------------------------------------------------------- solid surfaces
    Blur Tint often carries alpha: glass themes pair it with a backdrop blur. A surface

@@ -5,7 +5,7 @@
 import { isAvatarUrl, withVersion, versionOf } from './lib.js';
 
 export const MODULE = 'chat_browser';
-export const VERSION = '2.4.1'; // keep in sync with manifest.json
+export const VERSION = '2.5.0'; // keep in sync with manifest.json
 export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
@@ -30,6 +30,7 @@ export const DEFAULTS = Object.freeze({
     galleryFav: false,   // gallery: only favourites
     pageCards: 0,        // gallery: cards per page (0 = all on one page)
     pageChats: 0,        // list: chats per page (0 = all on one page)
+    hover: 'glint',      // hover on covers (mouse only): see HOVERS in index.js
 });
 
 export const ctx = () => SillyTavern.getContext();
