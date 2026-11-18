@@ -280,9 +280,10 @@ export function searchText(c) {
  *   sort:  recent | character | name | size
  * Returns [{ kind: 'section', … } | { kind: 'chat', chat, story?: { parts, total, unread } }]
  */
-export function buildEntries(chats, { sort = 'recent', merge = true, query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0 } = {}) {
+export function buildEntries(chats, { sort = 'recent', merge = true, query = '', filter = 'all', entity = null, persona = null, pins = {}, unreadOf = () => 0, stories: known = null } = {}) {
     const q = String(query ?? '').trim().toLowerCase();
-    const stories = linkStories(chats);
+    // `stories`: linkStories(chats) when the caller has it already (it is the slow part with many chats)
+    const stories = known ?? linkStories(chats);
     const pinned = c => !!pins[c.key];
 
     // Search and filters apply to any part of a story, so a story shows if one part matches.
@@ -731,4 +732,32 @@ export function pageEntries(entries, size, page = 1) {
         i++;
     }
     return { ...r, entries: out };
+}
+
+// ---------------------------------------------------------------- keeping the chat list up to date
+
+/**
+ * What tells a chat changed: message count, last message time, file size and the metadata the
+ * list shows. Same signature = the cached row (with its cleaned preview) is still right.
+ */
+export function chatSig(c) {
+    return [c.count, c.last, c.size, c.persona ?? '', c.memories, (c.chain || []).join('\u0001'), c.prev ?? '', c.mainChat ?? ''].join('\u0000');
+}
+
+/**
+ * The server lists chats newest-modified first, so after the newest `window` comes back, the
+ * rest is unchanged once the oldest few in it (`tail`) are unchanged. A window shorter than
+ * asked is every chat there is.
+ */
+export function windowSettled(fresh, byKey, asked, tail = 8) {
+    if (fresh.length < asked) return 'complete';
+    const end = fresh.slice(-tail);
+    return end.length && end.every(c => { const old = byKey.get(c.key); return old && chatSig(old) === chatSig(c); }) ? 'settled' : 'more';
+}
+
+/** The cached list with the fresh rows put in (replacing the same chats); `complete` = fresh is every chat. */
+export function mergeChats(cached, fresh, complete = false) {
+    if (complete) return fresh;
+    const seen = new Set(fresh.map(c => c.key));
+    return [...fresh, ...cached.filter(c => !seen.has(c.key))];
 }
