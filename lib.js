@@ -695,3 +695,40 @@ export function cardButtonAction(mode, gesture, open = false) {
     if (open && gesture === 'tap') return 'st';
     return (mode === 'tap') === (gesture === 'tap') ? 'reverie' : 'st';
 }
+
+// ---------------------------------------------------------------- pages
+
+/** Cards per page and chats per page the user can pick; 0 = everything on one long page. */
+export const PAGE_SIZES = Object.freeze({ cards: Object.freeze([0, 24, 48, 96, 200]), chats: Object.freeze([0, 50, 100, 200, 500]) });
+
+/** Which items a page shows: page is clamped to 1…pages. size 0 = one page with everything. */
+export function pageRange(total, size, page = 1) {
+    const n = Math.max(0, Number(total) || 0);
+    const per = Math.max(0, Math.floor(Number(size) || 0));
+    if (!per || n <= per) return { page: 1, pages: 1, from: 0, to: n };
+    const pages = Math.ceil(n / per);
+    const p = Math.min(pages, Math.max(1, Math.floor(Number(page) || 1)));
+    return { page: p, pages, from: (p - 1) * per, to: Math.min(n, p * per) };
+}
+
+/**
+ * One page of list entries (from buildEntries), counted in chats: section headers are not
+ * counted, and a page that starts inside a section repeats its header (marked `cont`).
+ */
+export function pageEntries(entries, size, page = 1) {
+    const chats = entries.reduce((n, e) => n + (e.kind === 'chat' ? 1 : 0), 0);
+    const r = pageRange(chats, size, page);
+    if (r.pages === 1) return { ...r, entries };
+    const out = [];
+    let section = null, sectionFrom = 0, emitted = null, i = 0;
+    for (const e of entries) {
+        if (i >= r.to) break;
+        if (e.kind !== 'chat') { section = e; sectionFrom = i; continue; }
+        if (i >= r.from) {
+            if (section && emitted !== section) { out.push(sectionFrom < r.from ? { ...section, cont: true } : section); emitted = section; }
+            out.push(e);
+        }
+        i++;
+    }
+    return { ...r, entries: out };
+}

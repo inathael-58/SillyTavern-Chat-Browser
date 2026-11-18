@@ -15,7 +15,7 @@
 
 import { installThemePalette } from './theme-palette.js';
 import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
-import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
+import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, linkStories, pageEntries, pageRange, PAGE_SIZES, relTime, renameInMeta, toMs } from './lib.js';
 import {
     VERSION, LOG, BASE_URL, CACHE_KEY, SEEN_KEY, CHUNK, DEFAULTS, ctx, settings, saveSettings, esc, toast, wait, errText, lsGet, lsSet, cab, st,
     charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
@@ -550,6 +550,10 @@ Object.assign(ui, {
     noteOpen: false,    // creator's note shown in full
     animate: false,     // tiles fade in one after another on the next grid render (not on every refresh)
     imgObserver: null,
+    // pages
+    page: 1,            // page on screen (grid or list)
+    pageKey: '',        // what the page counts through: a new search, filter, sort or page size starts at page 1
+    pageInfo: null,     // { page, pages, total, kind: 'cards' | 'chats' } of the grid or list on screen
 
     setLoading(on) {
         this.root?.querySelector('.cb_spin')?.toggleAttribute('hidden', !on);
@@ -567,6 +571,8 @@ Object.assign(ui, {
             // every character and group, also those without a chat yet
             const entities = galleryEntities();
             this.cards = buildCards(data.chats, { ...opts, sort: sortFor(s, true), extraText: cardSearchText, entities, tags: s.galleryTags, fav: s.galleryFav });
+            // the card page keeps the grid's page, so "back" lands where it was
+            if (!this.card) this.turnTo('cards', this.cards.length, s);
             // A card page lists every chat of that card, whatever the grid is filtered by.
             if (this.card) card = buildCards(data.chats, { entity: this.card, pins: s.pins, unreadOf, entities })[0] ?? null;
             if (!card) this.card = null;
@@ -577,8 +583,12 @@ Object.assign(ui, {
             this.shownN = card ? card.count : this.cards.reduce((n, x) => n + x.count, 0);
         } else {
             this.card = null;
-            this.entries = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge });
-            this.shownN = this.entries.filter(e => e.kind === 'chat').length;
+            const all = buildEntries(data.chats, { ...opts, sort: sortFor(s, false), merge: s.merge });
+            this.shownN = all.filter(e => e.kind === 'chat').length;
+            const pe = pageEntries(all, s.pageChats, this.pageFor('chats', s));
+            this.page = pe.page;
+            this.pageInfo = { page: pe.page, pages: pe.pages, total: this.shownN, kind: 'chats' };
+            this.entries = pe.entries;
         }
         this.root.classList.toggle('cb_oncard', !!card);
         this.root.querySelector('.cb_cardnav').hidden = !card;
@@ -598,18 +608,70 @@ Object.assign(ui, {
             if (anim) this.animate = false;
             const size = s.gallerySize === 'compact' ? 'compact' : 'large';
             const sizeBtn = (id, icon, tip) => `<button data-gsize="${id}" class="${size === id ? 'cb_on' : ''}" title="${tip}" aria-label="${tip}"><i class="${icon}"></i></button>`;
+            const pg = this.pageInfo;
+            const r = pageRange(this.cards.length, s.pageCards, pg.page);
+            const count = pg.pages > 1 ? `${r.from + 1}–${r.to} จาก ${this.cards.length.toLocaleString('th-TH')} การ์ด` : `${this.cards.length.toLocaleString('th-TH')} การ์ด`;
             list.innerHTML = this.cards.length
-                ? `<div class="cb_gridbar"><span>${this.cards.length} การ์ด</span><div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div>
-                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.map((x, i) => this.tileHtml(x, i)).join('')}</div>`
+                ? `<div class="cb_gridbar"><span>${count}</span><div class="rv_pgtools">${this.pagerHtml(true)}<div class="cb_seg cb_gsize">${sizeBtn('large', 'fa-solid fa-table-cells-large', 'ภาพใหญ่')}${sizeBtn('compact', 'fa-solid fa-table-cells', 'กะทัดรัด — เห็นการ์ดได้มากขึ้น')}</div></div></div>
+                    <div class="cb_grid cb_g_${size}${anim}" style="--step:${size === 'compact' ? 12 : 28}ms">${this.cards.slice(r.from, r.to).map((x, i) => this.tileHtml(x, i)).join('')}</div>
+                    ${this.pagerHtml()}`
                 : this.emptyHtml();
             this.watchCovers();
         } else if (!this.entries.length) {
             list.innerHTML = this.emptyHtml();
         } else {
+            list.insertAdjacentHTML('beforeend', this.listBarHtml());
             this.more();
         }
         list.scrollTop = top;
         this.renderSelbar();
+    },
+
+    /** The page to show of `kind`: page 1 again once the search, filters, sort or page size changed. */
+    pageFor(kind, s) {
+        const size = kind === 'cards' ? s.pageCards : s.pageChats;
+        const key = [kind, size, this.query, this.filter, this.entity, this.persona, sortFor(s, kind === 'cards'), s.merge, s.galleryTags.join('\u0001'), s.galleryFav].join('\u0000');
+        if (key !== this.pageKey) { this.pageKey = key; this.page = 1; }
+        return this.page;
+    },
+
+    /** The grid's page: which page and how many, clamped to what there is now. */
+    turnTo(kind, total, s) {
+        const r = pageRange(total, s.pageCards, this.pageFor(kind, s));
+        this.page = r.page;
+        this.pageInfo = { page: r.page, pages: r.pages, total, kind };
+    },
+
+    /**
+     * Pager. `top`: ‹ 3/42 › and how many per page, above the grid or list (the size picker only once
+     * there are more items than the smallest page). At the end: ‹ หน้า 3 / 42 ›, only with more than one page.
+     */
+    pagerHtml(top = false) {
+        const p = this.pageInfo;
+        if (!p) return '';
+        const s = settings();
+        const sizes = PAGE_SIZES[p.kind];
+        const size = p.kind === 'cards' ? s.pageCards : s.pageChats;
+        const nav = p.pages > 1 ? `<div class="rv_pgnav">
+                <button class="cb_iconbtn" data-pg="-1"${p.page > 1 ? '' : ' disabled'} title="หน้าก่อน" aria-label="หน้าก่อน"><i class="fa-solid fa-chevron-left"></i></button>
+                <button class="rv_pgnum" data-pgjump="1" title="ไปหน้าที่…" aria-label="หน้า ${p.page} จาก ${p.pages} — แตะเพื่อเลือกหน้า">${top ? '' : 'หน้า '}${p.page}<span>/${p.pages}</span></button>
+                <button class="cb_iconbtn" data-pg="1"${p.page < p.pages ? '' : ' disabled'} title="หน้าถัดไป" aria-label="หน้าถัดไป"><i class="fa-solid fa-chevron-right"></i></button>
+            </div>` : '';
+        if (!top) return nav ? `<div class="rv_pager">${nav}</div>` : '';
+        if (p.total <= sizes[1] && !size) return nav;
+        const unit = p.kind === 'cards' ? 'การ์ด' : 'แชท';
+        const opts = sizes.map(n => `<option value="${n}"${n === size ? ' selected' : ''}>${n ? `${n} ต่อหน้า` : 'แสดงทั้งหมด'}</option>`).join('');
+        return `${nav}<select data-pgsize="${p.kind}" class="rv_pgselect" aria-label="จำนวน${unit}ต่อหน้า" title="จำนวน${unit}ต่อหน้า">${opts}</select>`;
+    },
+
+    /** The bar above the list: how many chats, ‹ › and per page (nothing for a short list). */
+    listBarHtml() {
+        const p = this.pageInfo;
+        const pager = this.pagerHtml(true);
+        if (!p || !pager) return '';
+        const r = pageRange(p.total, settings().pageChats, p.page);
+        const count = p.pages > 1 ? `${r.from + 1}–${r.to} จาก ${p.total.toLocaleString('th-TH')} แชท` : `${p.total.toLocaleString('th-TH')} แชท`;
+        return `<div class="rv_pagetop"><span>${count}</span><div class="rv_pgtools">${pager}</div></div>`;
     },
 
     emptyHtml() {
@@ -645,6 +707,8 @@ Object.assign(ui, {
                 html.push(this.rowHtml(e));
             }
         }
+        // the list's last rows end with the pager (on the card page the list is that card's chats: no pages)
+        if (to === this.entries.length && !this.card) html.push(this.pagerHtml());
         list.insertAdjacentHTML('beforeend', html.join(''));
         this.shown = to;
         if (to < this.entries.length) {
@@ -661,7 +725,7 @@ Object.assign(ui, {
         const ava = e.head ? this.avatarHtml(e.head, 'cb_sec_ava') : `<span class="cb_sec_icon"><i class="fa-solid ${e.id === 'pinned' ? 'fa-thumbtack' : e.id === 'all' ? 'fa-clock' : 'fa-folder'}"></i></span>`;
         const foldable = !!e.entity;
         return `<div class="cb_section${foldable ? ' cb_foldable' : ''}${folded ? ' cb_folded' : ''}" data-sec="${esc(e.id)}"${foldable ? ' role="button" tabindex="0"' : ''}>
-            ${ava}<span class="cb_sec_title">${esc(e.title)}</span><span class="cb_sec_count">${e.count}</span>
+            ${ava}<span class="cb_sec_title">${esc(e.title)}${e.cont ? '<small class="rv_cont"> (ต่อ)</small>' : ''}</span><span class="cb_sec_count">${e.count}</span>
             ${e.unread ? `<span class="cb_badge">${e.unread}</span>` : ''}
             ${foldable ? `<span class="cb_sec_only" data-only="${esc(e.entity)}" title="ดูเฉพาะ ${esc(e.title)}"><i class="fa-solid fa-filter"></i></span><i class="fa-solid fa-chevron-down cb_chev"></i>` : ''}
         </div>`;
@@ -878,6 +942,17 @@ ui.render = function () {
     linkInfo = linkStories(data.chats);
     _render();
 };
+
+/** Cards or chats per page (0 = all), from the pager or the settings panel. */
+function setPageSize(kind, n) {
+    const s = settings();
+    const key = kind === 'cards' ? 'pageCards' : 'pageChats';
+    s[key] = PAGE_SIZES[kind]?.includes(n) ? n : 0;
+    saveSettings();
+    const box = document.getElementById(kind === 'cards' ? 'cb_set_pagecards' : 'cb_set_pagechats');
+    if (box) box.value = String(s[key]);
+    if (ui.root) ui.render();
+}
 
 function chatFromRow(row) {
     return row ? data.byKey.get(row.dataset.key) : null;
@@ -1218,8 +1293,27 @@ function wireBrowser(root) {
         e.stopImmediatePropagation();
     }, true);
 
+    // pages: ‹ ›, tap the page number to pick a page, and how many per page
+    const goPage = p => { ui.page = p; ui.animate = false; ui.render(); list.scrollTop = 0; };
+    list.addEventListener('change', e => {
+        const sel = e.target.closest?.('[data-pgsize]');
+        if (!sel) return;
+        setPageSize(sel.dataset.pgsize, Number(sel.value));
+        list.scrollTop = 0;
+    });
+
     list.addEventListener('click', async e => {
         const t = e.target;
+        const pgBtn = t.closest('[data-pg]');
+        if (pgBtn) { if (!pgBtn.disabled) goPage(ui.page + Number(pgBtn.dataset.pg)); return; }
+        if (t.closest('[data-pgjump]')) {
+            const pages = ui.pageInfo?.pages ?? 1;
+            const v = await sheetPrompt({ title: 'ไปหน้าที่', value: String(ui.page), ok: 'ไป', hint: `พิมพ์เลขหน้า 1–${pages}` });
+            const n = parseInt(String(v ?? '').replace(/[^0-9]/g, ''), 10);
+            if (n && ui.root === root) goPage(Math.min(pages, Math.max(1, n)));
+            return;
+        }
+        if (t.closest('.rv_pager, .rv_pgselect')) return;
         if (t.closest('[data-clearfilters]')) { s.galleryTags = []; s.galleryFav = false; saveSettings(); ui.render(); return; }
         const tile = t.closest('.cb_tile');
         if (tile) {
@@ -2365,6 +2459,15 @@ function renderSettingsPanel() {
                         <option value="tap">แตะ = Reverie</option>
                     </select>
                 </div>
+                <div class="cb_setrow">
+                    <span>การ์ดต่อหน้า</span>
+                    <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
+                </div>
+                <div class="cb_setrow">
+                    <span>แชทต่อหน้า</span>
+                    <select id="cb_set_pagechats" class="text_pole">${PAGE_SIZES.chats.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
+                </div>
+                <small class="cb_sethint">มีการ์ดหรือแชทเยอะมาก แบ่งเป็นหน้า ๆ จะไม่ต้องเลื่อนยาวและเปิดเร็วขึ้น · ปรับได้ที่แถบบนสุดของรายการใน Reverie ด้วย</small>
                 <small class="cb_sethint">ปุ่มการ์ดตัวละคร (<i class="fa-solid fa-address-card"></i>) บนแถบด้านบน · <b>ค้าง = Reverie</b> แตะเปิด Card ของ ST ตามเดิม กดค้างเปิด Reverie · <b>แตะ = Reverie</b> กลับกัน แตะเปิด Reverie กดค้างเปิด Card · ตอนแผง Card เปิดอยู่ แตะเพื่อปิดได้ตามปกติ</small>
                 <details class="cb_look">
                     <summary>หน้าตาปุ่มลอย</summary>
@@ -2404,6 +2507,10 @@ function renderSettingsPanel() {
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
     $('cb_set_cardbtn').value = cardMode();
+    $('cb_set_pagecards').value = String(s.pageCards);
+    $('cb_set_pagechats').value = String(s.pageChats);
+    $('cb_set_pagecards').addEventListener('change', e => setPageSize('cards', Number(e.target.value)));
+    $('cb_set_pagechats').addEventListener('change', e => setPageSize('chats', Number(e.target.value)));
     $('cb_set_cardbtn').addEventListener('change', e => { s.cardButton = e.target.value; saveSettings(); wireCardButton(); });
     $('cb_set_open').addEventListener('click', () => openBrowser());
     $('cb_set_resetpos').addEventListener('click', () => { s.launcherPos = { ...DEFAULTS.launcherPos }; saveSettings(); if (!s.launcher) { s.launcher = true; $('cb_set_launcher').checked = true; renderLauncher(); } placeLauncher(); });

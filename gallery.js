@@ -37,7 +37,8 @@ export function showCover(img) {
     coverWanted.add(img);
     const { w, h } = coverBox(img);
     const hit = coverCache.get(`${url}|${w}|${h}`);
-    if (hit) { img.src = hit; return; }
+    // already scaled once: no fade, it simply is there (no flicker on every redraw)
+    if (hit) { img.classList.add('cb_now'); img.src = hit; return; }
     if (!coverQueue.some(j => j.img === img)) coverQueue.push({ img, url, w, h });
     pumpCovers();
 }
@@ -46,7 +47,7 @@ export function dropCover(img) {
     coverWanted.delete(img);
     const i = coverQueue.findIndex(j => j.img === img);
     if (i >= 0) coverQueue.splice(i, 1);
-    if (img.hasAttribute('src')) { img.removeAttribute('src'); img.classList.remove('cb_loaded'); }
+    if (img.hasAttribute('src')) { img.removeAttribute('src'); img.classList.remove('cb_loaded', 'cb_now'); }
     img.previousElementSibling?.classList.remove('cb_under');
 }
 
@@ -355,11 +356,21 @@ export function closeCard() {
     const list = ui.root?.querySelector('.cb_list');
     if (!list || !ui.card) return;
     const from = ui.card;
+    // stepping through cards may have gone past the grid's page: back on the page of the card shown last
+    const size = settings().pageCards;
+    const i = ui.cards.findIndex(x => x.id === from);
+    const want = size && i >= 0 ? Math.floor(i / size) + 1 : ui.page;
+    const moved = want !== ui.page;
+    ui.page = want;
     ui.card = null;
     ui.render();
-    list.scrollTop = ui.gridTop;
+    list.scrollTop = moved ? 0 : ui.gridTop;
     const tile = list.querySelector(`.cb_tile[data-card="${CSS.escape(from)}"]`);
-    if (tile) { tile.classList.add('cb_back_here'); tile.focus({ preventScroll: true }); }
+    if (tile) {
+        if (moved) tile.scrollIntoView({ block: 'center' });
+        tile.classList.add('cb_back_here');
+        tile.focus({ preventScroll: true });
+    }
 }
 
 /** Big covers or small ones; the card at the top of the screen stays at the top. */
