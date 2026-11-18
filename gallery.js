@@ -5,6 +5,7 @@
 
 import { ctx, settings, saveSettings, esc, toast, errText, st, charOf, charIndex, groupOf, thumb, currentKey, isGenerating, data, ui, app, sheet, fullAvatar } from './core.js';
 import { addedAt, fullTime, noteText, relTime, tagCounts } from './lib.js';
+import { playCardPage } from './fx.js';
 
 // ---------------------------------------------------------------- gallery cards
 
@@ -350,6 +351,7 @@ export function openCard(id) {
     ui.render();
     list.scrollTop = 0;
     list.querySelector('.cb_card')?.classList.add('cb_enter');
+    playCardPage();
 }
 
 export function closeCard() {
@@ -401,6 +403,7 @@ export function stepCard(d) {
     ui.render();
     list.scrollTop = 0;
     list.querySelector('.cb_card')?.classList.add(d > 0 ? 'cb_from_r' : 'cb_from_l');
+    playCardPage();
 }
 
 /** The cover full screen; any tap closes it. */
