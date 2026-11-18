@@ -684,3 +684,14 @@ export function withVersion(src, v) {
 export function versionOf(src) {
     try { return new URL(src, 'http://localhost/').searchParams.get('rv') ?? ''; } catch { return ''; }
 }
+
+/**
+ * What a press on SillyTavern's own Card button (top bar) does under Reverie's "Card button" setting.
+ * mode: 'off' | 'hold' (hold opens Reverie) | 'tap' (tap opens Reverie); gesture: 'tap' | 'hold';
+ * open: the Card panel is open already, so a tap still closes it. Returns 'st' or 'reverie'.
+ */
+export function cardButtonAction(mode, gesture, open = false) {
+    if (mode !== 'hold' && mode !== 'tap') return 'st';
+    if (open && gesture === 'tap') return 'st';
+    return (mode === 'tap') === (gesture === 'tap') ? 'reverie' : 'st';
+}

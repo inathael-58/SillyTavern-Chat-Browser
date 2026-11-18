@@ -5,7 +5,7 @@
 import { isAvatarUrl, withVersion, versionOf } from './lib.js';
 
 export const MODULE = 'chat_browser';
-export const VERSION = '2.2.1'; // keep in sync with manifest.json
+export const VERSION = '2.3.0'; // keep in sync with manifest.json
 export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
@@ -23,6 +23,7 @@ export const DEFAULTS = Object.freeze({
     launcherLook: null,  // filled from LOOK_DEFAULT
     topbar: true,        // icon in the top bar
     topbarLook: null,    // filled from TOP_DEFAULT
+    cardButton: 'off',   // off | hold | tap — ST's Card button: hold (or tap) opens Reverie
     scheme: 'theme',     // theme | light | dark — colours of the browser window
     gallerySize: 'large', // large | compact — cover size in the gallery
     galleryTags: Object.freeze([]), // gallery: only cards with every one of these tags

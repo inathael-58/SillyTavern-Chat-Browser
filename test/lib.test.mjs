@@ -289,3 +289,17 @@ test('moveItem and parseTags', async () => {
     assert.deepEqual(moveItem(['a', 'b'], 5, 0), ['a', 'b']);
     assert.deepEqual(parseTags('a, b ,, A\nc'), ['a', 'b', 'c']);
 });
+
+test('Card button: tap and hold follow the chosen mode', async () => {
+    const { cardButtonAction: a } = await import('../lib.js');
+    assert.equal(a('off', 'tap'), 'st');
+    assert.equal(a('off', 'hold'), 'st');
+    assert.equal(a(undefined, 'hold'), 'st');
+    assert.equal(a('hold', 'tap'), 'st');
+    assert.equal(a('hold', 'hold'), 'reverie');
+    assert.equal(a('tap', 'tap'), 'reverie');
+    assert.equal(a('tap', 'hold'), 'st');
+    // an open Card panel still closes with a tap
+    assert.equal(a('tap', 'tap', true), 'st');
+    assert.equal(a('hold', 'hold', true), 'reverie');
+});

@@ -15,7 +15,7 @@
 
 import { installThemePalette } from './theme-palette.js';
 import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
-import { buildCards, buildEntries, cleanPreview, clip, compareText, fileName, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
+import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, linkStories, relTime, renameInMeta, toMs } from './lib.js';
 import {
     VERSION, LOG, BASE_URL, CACHE_KEY, SEEN_KEY, CHUNK, DEFAULTS, ctx, settings, saveSettings, esc, toast, wait, errText, lsGet, lsSet, cab, st,
     charOf, charIndex, groupOf, thumb, personaName, personaOf, currentKey, isGenerating, data, post, clamp, ui, app,
@@ -958,7 +958,7 @@ async function runDiagnostics() {
     add('viewport', `${innerWidth}x${innerHeight} · vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)} @${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)} scale ${vv.scale}` : '-'} · dpr ${devicePixelRatio}`);
     add('scroll', `window ${scrollX},${scrollY} · html ${document.documentElement.scrollTop} · body ${document.body.scrollTop}`);
     const s = settings();
-    add('settings', `view=${s.view} launcher=${s.launcher} topbar=${s.topbar} scheme=${s.scheme ?? '-'}`);
+    add('settings', `view=${s.view} launcher=${s.launcher} topbar=${s.topbar} cardButton=${s.cardButton} scheme=${s.scheme ?? '-'}`);
 
     const before = diagLog.length;
     const wasOpen = !!ui.root;
@@ -2257,6 +2257,79 @@ function renderTopbar() {
     applyTopLook(el);
 }
 
+// ---------------------------------------------------------------- ST's own Card button: tap / hold
+
+const CARD_HOLD_MS = 450;
+let cardHold = null;    // { id, x, y, el, timer } while a finger rests on the Card button
+let cardEatClick = false; // swallow the one click that ends a hold; reset on the next pointerdown
+
+const cardToggleOf = t => (t instanceof Element ? t.closest('#rightNavHolder > .drawer-toggle') : null);
+const cardMode = () => { const m = settings().cardButton; return m === 'hold' || m === 'tap' ? m : 'off'; };
+const cardPanelOpen = () => !!document.querySelector('#rightNavHolder > .drawer-content.openDrawer');
+
+function cardRun(action, el) {
+    diag(`card button → ${action}`);
+    if (action === 'reverie') openBrowser();
+    else el.click(); // untrusted, so it passes straight to ST's own handler
+}
+
+function onCardDown(e) {
+    cardEatClick = false;
+    clearTimeout(cardHold?.timer);
+    cardHold = null;
+    if (!e.isTrusted || e.button !== 0 || cardMode() === 'off') return;
+    if (document.documentElement.classList.contains('qd_picking')) return; // Quick Dock is choosing a button
+    const el = cardToggleOf(e.target);
+    if (!el) return;
+    const hold = { id: e.pointerId, x: e.clientX, y: e.clientY, el };
+    hold.timer = setTimeout(() => {
+        if (cardHold !== hold) return;
+        cardHold = null;
+        cardEatClick = true;
+        try { navigator.vibrate?.(12); } catch { /* ignore */ }
+        cardRun(cardButtonAction(cardMode(), 'hold', cardPanelOpen()), el);
+    }, CARD_HOLD_MS);
+    cardHold = hold;
+}
+
+function onCardMove(e) {
+    if (cardHold && e.pointerId === cardHold.id && Math.hypot(e.clientX - cardHold.x, e.clientY - cardHold.y) > 10) {
+        clearTimeout(cardHold.timer);
+        cardHold = null;
+    }
+}
+
+function onCardUp(e) {
+    if (cardHold && e.pointerId === cardHold.id) { clearTimeout(cardHold.timer); cardHold = null; }
+}
+
+function onCardClick(e) {
+    if (!e.isTrusted) return; // other extensions (Quick Dock shortcuts) still get ST's Card panel
+    if (cardEatClick) { cardEatClick = false; e.preventDefault(); e.stopImmediatePropagation(); return; }
+    if (cardMode() === 'off') return;
+    const el = cardToggleOf(e.target);
+    if (!el || cardButtonAction(cardMode(), 'tap', cardPanelOpen()) !== 'reverie') return;
+    e.preventDefault();
+    e.stopImmediatePropagation(); // capture on document runs before ST's handler on the button
+    cardRun('reverie', el);
+}
+
+function onCardMenu(e) {
+    if (cardMode() !== 'off' && cardToggleOf(e.target)) e.preventDefault(); // Android long-press menu
+}
+
+function wireCardButton() {
+    document.body.classList.toggle('cb_cardhold', cardMode() !== 'off');
+    if (wireCardButton.done) return;
+    wireCardButton.done = true;
+    document.addEventListener('pointerdown', onCardDown, true);
+    document.addEventListener('pointermove', onCardMove, true);
+    document.addEventListener('pointerup', onCardUp, true);
+    document.addEventListener('pointercancel', onCardUp, true);
+    document.addEventListener('click', onCardClick, true);
+    document.addEventListener('contextmenu', onCardMenu, true);
+}
+
 function addWandItem() {
     const menu = document.getElementById('extensionsMenu');
     if (!menu || document.getElementById('cb_wand')) return;
@@ -2284,6 +2357,15 @@ function renderSettingsPanel() {
                 <div class="cb_setbtns"><div id="cb_set_open" class="menu_button"><i class="fa-solid fa-comments"></i> เปิด Reverie</div></div>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_launcher"> ปุ่มลอยบนจอ (ลากไปวางตรงไหนก็ได้ หรือเก็บเข้า Quick Dock)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_topbar"> ไอคอนบนแถบด้านบน</label>
+                <div class="cb_setrow">
+                    <span>ปุ่ม Card ของ ST</span>
+                    <select id="cb_set_cardbtn" class="text_pole">
+                        <option value="off">ปกติ</option>
+                        <option value="hold">ค้าง = Reverie</option>
+                        <option value="tap">แตะ = Reverie</option>
+                    </select>
+                </div>
+                <small class="cb_sethint">ปุ่มการ์ดตัวละคร (<i class="fa-solid fa-address-card"></i>) บนแถบด้านบน · <b>ค้าง = Reverie</b> แตะเปิด Card ของ ST ตามเดิม กดค้างเปิด Reverie · <b>แตะ = Reverie</b> กลับกัน แตะเปิด Reverie กดค้างเปิด Card · ตอนแผง Card เปิดอยู่ แตะเพื่อปิดได้ตามปกติ</small>
                 <details class="cb_look">
                     <summary>หน้าตาปุ่มลอย</summary>
                     <div id="cb_look_body"></div>
@@ -2321,6 +2403,8 @@ function renderSettingsPanel() {
     $('cb_set_topbar').checked = !!s.topbar;
     $('cb_set_launcher').addEventListener('change', e => { s.launcher = e.target.checked; saveSettings(); renderLauncher(); });
     $('cb_set_topbar').addEventListener('change', e => { s.topbar = e.target.checked; saveSettings(); renderTopbar(); });
+    $('cb_set_cardbtn').value = cardMode();
+    $('cb_set_cardbtn').addEventListener('change', e => { s.cardButton = e.target.value; saveSettings(); wireCardButton(); });
     $('cb_set_open').addEventListener('click', () => openBrowser());
     $('cb_set_resetpos').addEventListener('click', () => { s.launcherPos = { ...DEFAULTS.launcherPos }; saveSettings(); if (!s.launcher) { s.launcher = true; $('cb_set_launcher').checked = true; renderLauncher(); } placeLauncher(); });
     renderLookEditor($('cb_look_body'));
@@ -2686,6 +2770,7 @@ async function init() {
     renderSettingsPanel();
     renderLauncher();
     renderTopbar();
+    wireCardButton();
     addWandItem();
     registerCommand();
     wireEvents();
