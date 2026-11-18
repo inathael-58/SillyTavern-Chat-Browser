@@ -23,6 +23,7 @@ import {
 } from './core.js';
 import { galleryUi, cardSearchText, openCard, closeCard, setGallerySize, stepCard, zoomCover, galleryEntities, pickTags, startNewChat, bulkAvailable, handOffToBulk, updateFromFile } from './gallery.js';
 import { openEditor, editorOpen, closeEditor, closeEditorGuarded } from './editor.js';
+import { HOVERS, applyHover, askGyro, gyroSupported, hoverMode, resetScrollFx, syncGyro, watchTilesFx, wireCoverFx } from './fx.js';
 
 // ---------------------------------------------------------------- display regex
 //
@@ -753,6 +754,7 @@ Object.assign(ui, {
                     ${this.pagerHtml()}`
                 : this.emptyHtml();
             this.watchCovers();
+            watchTilesFx(list);
         } else if (!this.entries.length) {
             list.innerHTML = this.emptyHtml();
         } else {
@@ -1105,49 +1107,6 @@ const SCHEMES = [
     ['dark', 'fa-solid fa-moon', 'กลางคืน'],
 ];
 
-/** Hover on covers, picked in the settings panel. holo, tilt and spot follow the pointer. */
-const HOVERS = [
-    ['glint', 'แสงวาบ'],
-    ['holo', 'ฟอยล์รุ้ง'],
-    ['tilt', 'เอียงตามเมาส์'],
-    ['spot', 'สปอตไลต์'],
-    ['glow', 'ขอบเรืองแสง'],
-    ['bloom', 'สว่างนุ่ม'],
-    ['none', 'ไม่มี'],
-];
-const FOLLOWS_POINTER = new Set(['holo', 'tilt', 'spot']);
-const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
-function applyHover(root = ui.root) {
-    if (root) root.dataset.hover = hoverMode();
-}
-
-/** Where the mouse is on a cover, for the hover styles that follow it (one update per frame). */
-function wireHoverPointer(list) {
-    let frame = 0, last = null;
-    const reset = el => { el.style.removeProperty('--rx'); el.style.removeProperty('--ry'); };
-    list.addEventListener('pointermove', e => {
-        if (e.pointerType !== 'mouse' || !FOLLOWS_POINTER.has(hoverMode())) return;
-        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
-        if (!el) return;
-        last = { el, x: e.clientX, y: e.clientY };
-        frame ||= requestAnimationFrame(() => {
-            frame = 0;
-            const { el: t, x, y } = last;
-            const r = t.getBoundingClientRect();
-            const fx = clamp((x - r.left) / r.width, 0, 1), fy = clamp((y - r.top) / r.height, 0, 1);
-            t.style.setProperty('--mx', `${(fx * 100).toFixed(1)}%`);
-            t.style.setProperty('--my', `${(fy * 100).toFixed(1)}%`);
-            t.style.setProperty('--ry', `${((fx - 0.5) * 14).toFixed(2)}deg`);
-            t.style.setProperty('--rx', `${((0.5 - fy) * 14).toFixed(2)}deg`);
-        });
-    }, { passive: true });
-    // leaving a cover: it settles back flat
-    list.addEventListener('pointerout', e => {
-        const el = e.target.closest?.('.cb_tile, .cb_heroimg');
-        if (el && !el.contains(e.relatedTarget)) reset(el);
-    }, { passive: true });
-}
-
 function applyScheme(root = ui.root) {
     if (!root) return;
     const s = settings();
@@ -1300,6 +1259,10 @@ function openBrowser() {
         </section>`;
     document.body.append(root);
     ui.root = root;
+    // effects on covers: cards play again as they scroll in; the motion sensors are asked for from this tap
+    resetScrollFx();
+    if (settings().hoverGyro) askGyro();
+    syncGyro();
     // Visible first, then filled: if drawing fails the panel still shows (with its close button) and says why.
     requestAnimationFrame(() => root.classList.add('cb_in'));
     try {
@@ -1324,6 +1287,7 @@ function closeBrowser() {
     diag(`close ${Date.now() - (ui.openedAt || 0)}ms หลังเปิด · ${(new Error().stack || '').split('\n').slice(1, 4).map(x => x.trim()).join(' < ')}`);
     closeEditor();      // its unsaved edits stay as a draft
     ui.root = null;
+    syncGyro();
     ui.query = '';      // the next open starts with an empty search box, so no hidden filter is left behind
     ui.observer?.disconnect();
     ui.observer = null;
@@ -1393,7 +1357,7 @@ function wireBrowser(root) {
     const list = root.querySelector('.cb_list');
     const search = root.querySelector('.cb_search');
     const clearq = root.querySelector('.cb_clearq');
-    wireHoverPointer(list);
+    wireCoverFx(list);
 
     // Ignore a click that arrives right after opening: it belongs to the tap that opened the browser.
     // with the card editor open, unsaved edits are asked about first
@@ -2659,7 +2623,11 @@ function renderSettingsPanel() {
                     <span>เอฟเฟกต์ปกการ์ด</span>
                     <select id="cb_set_hover" class="text_pole">${HOVERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
                 </div>
-                <small class="cb_sethint">ตอนชี้เมาส์ที่ปกการ์ดในแกลเลอรีและหน้าการ์ด (เฉพาะคอมที่ใช้เมาส์ บนจอสัมผัสไม่มี) ไม่มีแบบไหนขยายรูป · ปิดเองถ้าเปิด "ลดการเคลื่อนไหว" ในระบบ</small>
+                <small class="cb_sethint">ตอนชี้เมาส์ที่ปกการ์ด ไม่มีแบบไหนขยายรูป · จอสัมผัสไม่มีเมาส์ ใช้สามข้อด้านล่างแทน · ปิดเองถ้าเปิด "ลดการเคลื่อนไหว" ในระบบ</small>
+                <label class="checkbox_label"><input type="checkbox" id="cb_set_fxopen"> เล่นเอฟเฟกต์ที่รูปใหญ่ตอนเปิดหน้าการ์ด</label>
+                <label class="checkbox_label"><input type="checkbox" id="cb_set_fxscroll"> เล่นเอฟเฟกต์ตอนการ์ดเลื่อนเข้ามาในจอ (แกลเลอรี ใบละครั้ง)</label>
+                <label class="checkbox_label"><input type="checkbox" id="cb_set_fxgyro"> เอียงมือถือ/ไอแพดแล้วแสงบนรูปใหญ่ขยับตาม</label>
+                <small class="cb_sethint">เอียงเครื่อง: ใช้กับ ฟอยล์รุ้ง · เอียงตามเมาส์ · สปอตไลต์ ในหน้าการ์ด เหมือนถือการ์ดสะสมเอียงรับแสง · iPhone/iPad จะถามขออนุญาตใช้เซนเซอร์ตอนติ๊ก</small>
                 <div class="cb_setrow">
                     <span>การ์ดต่อหน้า</span>
                     <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
@@ -2711,6 +2679,26 @@ function renderSettingsPanel() {
     $('cb_set_cardbtn').value = cardMode();
     $('cb_set_hover').value = hoverMode();
     $('cb_set_hover').addEventListener('change', e => { s.hover = e.target.value; saveSettings(); applyHover(); });
+    $('cb_set_fxopen').checked = !!s.hoverOpen;
+    $('cb_set_fxscroll').checked = !!s.hoverScroll;
+    $('cb_set_fxgyro').checked = !!s.hoverGyro;
+    $('cb_set_fxopen').addEventListener('change', e => { s.hoverOpen = e.target.checked; saveSettings(); });
+    $('cb_set_fxscroll').addEventListener('change', e => { s.hoverScroll = e.target.checked; saveSettings(); if (ui.root) ui.render(); });
+    $('cb_set_fxgyro').addEventListener('change', async e => {
+        const box = e.target;
+        if (box.checked) {
+            // asked straight from this tap: iPhone and iPad only ask inside one
+            const r = gyroSupported() ? await askGyro() : 'unsupported';
+            if (r !== 'granted') {
+                box.checked = false;
+                toast.warn(r === 'unsupported' ? 'เครื่องนี้ไม่มีเซนเซอร์บอกการเอียง' : 'ไม่ได้รับอนุญาตให้ใช้เซนเซอร์การเคลื่อนไหว (เปลี่ยนได้ในการตั้งค่าของเบราว์เซอร์)');
+                return;
+            }
+        }
+        s.hoverGyro = box.checked;
+        saveSettings();
+        syncGyro();
+    });
     $('cb_set_pagecards').value = String(s.pageCards);
     $('cb_set_pagechats').value = String(s.pageChats);
     $('cb_set_pagecards').addEventListener('change', e => setPageSize('cards', Number(e.target.value)));
@@ -3089,7 +3077,7 @@ async function checkForNewVersion() {
         globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Reverie', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'fx.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
