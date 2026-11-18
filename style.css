@@ -1500,6 +1500,9 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     opacity: 0.55;
     z-index: -2;
     pointer-events: none;
+    /* fades out toward the bottom instead of ending at the hero's edge (see .cb_hero::after) */
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 260px), transparent calc(100% - 40px));
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 260px), transparent calc(100% - 40px));
 }
 .cb_hero::after {
     content: '';
@@ -1508,6 +1511,11 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     z-index: -1;
     background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--cb-solid) 55%, transparent) 55%, var(--cb-solid) 100%);
     pointer-events: none;
+    /* The panel under the hero is --cb-panel, often a little see-through, not --cb-solid: a shade that
+       ended on --cb-solid left a visible line where the hero stops. Both layers fade to nothing instead,
+       so the hero melts into whatever the panel is on every theme. */
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 200px), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 200px), transparent 100%);
 }
 .cb_heroimg {
     position: relative;
