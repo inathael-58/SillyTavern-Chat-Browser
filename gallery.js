@@ -480,7 +480,7 @@ export const galleryUi = {
                 ${step(-1, prev)}${step(1, next)}`;
         return `<div class="cb_card" data-cardpage="${esc(card.id)}">
             <div class="cb_hero">
-                <img class="cb_herobg" src="${esc(m.thumb || m.collage?.[0]?.thumb || '')}" alt="" aria-hidden="true">
+                <img class="cb_herobg" src="${esc(m.full || m.collage?.[0]?.full || m.thumb || '')}" alt="" aria-hidden="true" decoding="async">
                 <button class="cb_heroimg" data-zoom="1" title="ดูรูปเต็ม" aria-label="ดูรูปเต็ม">${this.coverHtml(m, false)}</button>
                 <div class="cb_heroinfo">
                     <h3>${m.fav ? '<i class="fa-solid fa-star cb_favstar" title="ตัวละครโปรด"></i>' : ''}${esc(card.name)}</h3>
