@@ -1517,11 +1517,13 @@ function wireBrowser(root) {
         doOpen(c);
     });
 
-    // Long press on a row (or, with Bulk Manager installed, a gallery card) starts selecting (touch).
-    let pressTimer = null;
+    // Long press on a row or a gallery card starts selecting: a finger, a pen, or holding the left
+    // mouse button (moving while holding cancels it, so dragging a scrollbar or text doesn't).
+    let pressTimer = null, pressAt = null;
     list.addEventListener('pointerdown', e => {
         skipClick = false;
-        if (e.pointerType !== 'touch' || ui.selecting) return;
+        if (ui.selecting || (e.pointerType === 'mouse' && e.button !== 0)) return;
+        pressAt = { x: e.clientX, y: e.clientY };
         const row = e.target.closest('.cb_row');
         const tile = !row && ui.selectsCards() ? e.target.closest('.cb_tile') : null;
         if ((!row && !tile) || e.target.closest('button')) return;
@@ -1535,6 +1537,9 @@ function wireBrowser(root) {
         }, 550);
     });
     const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
+    list.addEventListener('pointermove', e => {
+        if (pressTimer && pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > 10) cancelPress();
+    }, { passive: true });
 
     // Phones: the search, sort and filter rows fold away while scrolling down and come back on the way up.
     const small = matchMedia('(max-width: 600px)');
