@@ -14,6 +14,7 @@
  */
 
 import { installThemePalette } from './theme-palette.js';
+import { installNightAccent } from './night-palette.js';
 import { floatColors, COLOR_MODE_LABELS } from './float-colors.js';
 import { buildCards, buildEntries, cardButtonAction, cleanPreview, clip, compareText, fileName, fullTime, chatSig, linkStories, mergeChats, pageEntries, pageRange, PAGE_SIZES, relTime, renameInMeta, toMs, windowSettled } from './lib.js';
 import {
@@ -3085,7 +3086,7 @@ async function checkForNewVersion() {
         globalThis.toastr?.info(`ติดตั้ง v${remote} ไว้แล้ว แต่หน้านี้ยังรัน v${VERSION}<br>แตะเพื่อโหลดเวอร์ชันใหม่`, 'Reverie', {
             timeOut: 0, extendedTimeOut: 0, closeButton: true, escapeHtml: false,
             onclick: async () => {
-                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'fx.js', 'lib.js', 'theme-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
+                await Promise.all(['index.js', 'core.js', 'gallery.js', 'editor.js', 'fx.js', 'lib.js', 'theme-palette.js', 'night-palette.js', 'float-colors.js', 'style.css', 'manifest.json'].map(f => fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
                 location.reload();
             },
         });
@@ -3098,6 +3099,7 @@ async function init() {
     try {
         palette = installThemePalette({ prefix: 'cbp', surfaces: { light: '#fbfaf7', dark: '#1b1a21' } });
         palette.onChange(() => document.querySelectorAll('.cb_launch').forEach(el => applyLook(el)));
+        installNightAccent(palette, 'cbp'); // กลางคืน: สีเน้นของธีมแบบนุ่มลง (night-palette.js)
     } catch (err) { console.warn(LOG, 'theme palette', err); }
     settings();
     renderSettingsPanel();

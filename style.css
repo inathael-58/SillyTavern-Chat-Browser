@@ -8,6 +8,7 @@
     --cb-faint: color-mix(in srgb, var(--cb-fg) 9%, transparent);
     --cb-line: color-mix(in srgb, var(--cb-fg) 13%, transparent);
     --cb-hover: color-mix(in srgb, var(--cb-fg) 6%, transparent);
+    --cb-field: var(--cb-faint); /* text box background */
     --cb-tint: var(--SmartThemeBlurTintColor, rgba(23, 23, 23, 0.92));
     --cb-panel: color-mix(in srgb, var(--cb-tint) 88%, #000);
     --cb-solid: color-mix(in srgb, var(--cb-panel) 100%, #000);
@@ -35,16 +36,40 @@
     --cb-ok: #2f8a3e;
     color-scheme: light;
 }
+/* night: for a dark room (same values as NIGHT in night-palette.js) — a near-black panel, soft grey
+   text instead of white, faint borders, text boxes darker than the panel, and the theme accent with
+   less saturation at 7:1 (--cbp-p-accent-night, set once the palette is ready) */
 .cb_root[data-scheme="dark"] {
-    --cb-fg: #e7e4ee;
-    --cb-tint: rgba(22, 21, 28, 0.95);
-    --cb-panel: rgba(24, 23, 30, 0.97);
-    --cb-solid: #1b1a21;
-    --cb-accent: color-mix(in oklab, var(--SmartThemeQuoteColor, #e18a24) 72%, #fff);
-    --cb-on-accent: #17161c;
+    --cb-fg: #c4c0cb;
+    --cb-muted: #8a8693;
+    --cb-faint: rgba(196, 192, 203, 0.06);
+    --cb-hover: rgba(196, 192, 203, 0.05);
+    --cb-line: #27262d;
+    --cb-field: #0d0c10;
+    --cb-tint: #111015;
+    --cb-panel: #111015;
+    --cb-solid: #111015;
+    --cb-accent: color-mix(in oklab, var(--SmartThemeQuoteColor, #e18a24) 55%, #a6a2ae);
+    --cb-on-accent: #111015;
     --cb-shadow: rgba(0, 0, 0, 0.6);
     color-scheme: dark;
 }
+.cb_root[data-scheme="dark"] .cb_backdrop { background: rgba(0, 0, 0, 0.72); }
+/* day / night: ST's own controls inside the window (inputs, menu buttons, checkboxes) follow the
+   chosen look, not the user's theme — otherwise a light theme leaves bright boxes in the night window */
+.cb_root:is([data-scheme="light"], [data-scheme="dark"]) {
+    --SmartThemeBodyColor: var(--cb-fg);
+    --SmartThemeEmColor: var(--cb-fg);
+    --SmartThemeBorderColor: var(--cb-line);
+    --SmartThemeBlurTintColor: var(--cb-solid);
+}
+:where(.cb_root):is([data-scheme="light"], [data-scheme="dark"]) :is(.text_pole, textarea, select, input:is([type="text"], [type="search"], [type="number"], [type="url"], [type="email"], [type="password"], :not([type]))) {
+    background-color: var(--cb-field);
+    color: var(--cb-fg);
+    border-color: var(--cb-line);
+}
+:where(.cb_root):is([data-scheme="light"], [data-scheme="dark"]) :is(.text_pole, textarea, input)::placeholder { color: var(--cb-muted); opacity: 1; }
+.cb_root[data-scheme="light"] { --cb-field: #ffffff; }
 
 /* ---------------------------------------------------------------- overlay & panel */
 
@@ -198,7 +223,7 @@
     height: 44px;
     padding: 0 8px 0 15px;
     border-radius: 14px;
-    background: var(--cb-faint);
+    background: var(--cb-field);
     border: 1px solid var(--cb-line);
     box-shadow: 0 1px 2px color-mix(in srgb, var(--cb-shadow) 35%, transparent) inset;
     transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
@@ -931,7 +956,7 @@
     padding: 0 14px !important;
     border-radius: 12px !important;
     border: 1px solid var(--cb-line) !important;
-    background: var(--cb-faint) !important;
+    background: var(--cb-field) !important;
     color: var(--cb-fg) !important;
     font: inherit;
     font-size: 1em;
@@ -2156,7 +2181,7 @@ body.no-blur .cb_root :is(.cb_panel, .cb_section) { background: var(--cb-solid);
     padding: 12px 14px !important;
     border-radius: 14px !important;
     border: 1px solid var(--cb-line) !important;
-    background: var(--cb-faint) !important;
+    background: var(--cb-field) !important;
     color: var(--cb-fg) !important;
     font: inherit;
     font-size: 16px !important; /* 16px: iOS does not zoom in on focus */
@@ -2250,7 +2275,7 @@ html.cbp-pal :is(.cb_root:not([data-scheme]), .cb_settings) {
     --cb-solid: var(--cbp-p-surface);
 }
 html.cbp-pal .cb_root[data-scheme="light"] { --cb-accent: var(--cbp-p-accent-light); }
-html.cbp-pal .cb_root[data-scheme="dark"] { --cb-accent: var(--cbp-p-accent-dark); }
+html.cbp-pal .cb_root[data-scheme="dark"] { --cb-accent: var(--cbp-p-accent-night, var(--cbp-p-accent-dark)); }
 
 /* ST's plain .menu_button is display:flex, which drops the space between an icon and its
    label. Zero-specificity roots, so a gap this extension already sets still wins. */
