@@ -42,6 +42,17 @@ function settle(el) {
     for (const p of ['--mx', '--my', '--rx', '--ry']) el.style.removeProperty(p);
 }
 
+/**
+ * Switch the effect off. The light fades out where it is: its place is reset only once it has faded
+ * (style.css fades it in about 0.35 s). Resetting at once made it jump to the middle while fading.
+ */
+const fading = new WeakMap();
+function fadeOut(el) {
+    el.classList.remove('rv_live');
+    clearTimeout(fading.get(el));
+    fading.set(el, setTimeout(() => { if (!el.classList.contains('rv_live')) settle(el); }, 500));
+}
+
 // ---------------------------------------------------------------- mouse
 
 /** Hover with a mouse (also a trackpad or mouse on an iPad); the light follows it, once per frame. */
@@ -58,8 +69,7 @@ export function wireCoverFx(list) {
         if (!el || el.contains(e.relatedTarget)) return;
         delete el.dataset.mouse;
         if (el.dataset.playing || el.dataset.gyro) return;
-        el.classList.remove('rv_live');
-        settle(el);
+        fadeOut(el);
     }, { passive: true });
     list.addEventListener('pointermove', e => {
         if (e.pointerType !== 'mouse' || !FOLLOWS.has(hoverMode())) return;
@@ -86,7 +96,7 @@ export function playCover(el) {
         delete el.dataset.playing;
         el.classList.remove('rv_play');
         // (a touch screen keeps :hover after a tap, so the mouse is tracked by hand)
-        if (!el.dataset.gyro && !el.dataset.mouse) { el.classList.remove('rv_live'); settle(el); }
+        if (!el.dataset.gyro && !el.dataset.mouse) fadeOut(el);
     };
     if (mode === 'glint' || mode === 'glow') {
         el.classList.remove('rv_play');
@@ -191,7 +201,7 @@ function applyGyro() {
     const el = ui.root?.querySelector('.cb_heroimg');
     const on = el && reading && FOLLOWS.has(hoverMode()) && !reduced();
     for (const old of ui.root?.querySelectorAll('[data-gyro]') ?? []) {
-        if (old !== el || !on) { delete old.dataset.gyro; old.classList.remove('rv_live'); settle(old); }
+        if (old !== el || !on) { delete old.dataset.gyro; fadeOut(old); }
     }
     if (!on) return;
     // the screen's own axes: turned sideways, the phone's tilt left/right is its front/back
