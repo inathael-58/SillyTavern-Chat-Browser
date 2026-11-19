@@ -27,7 +27,80 @@ export const FOLLOWS = new Set(['holo', 'tilt', 'spot', 'glitter']);
 
 export const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
 export function applyHover(root = ui.root) {
-    if (root) root.dataset.hover = hoverMode();
+    if (!root) return;
+    root.dataset.hover = hoverMode();
+    if (hoverMode() === 'glitter') glitterTextures();
+}
+
+// ---------------------------------------------------------------- glitter textures
+//
+// Sparkles at random places, drawn once on a canvas and used as a picture. A CSS pattern of dots
+// repeats every few pixels, and the eye sees the rows (it looked like a grid). The same seed
+// every time, so a card looks the same on every visit.
+
+let glitterDone = false;
+function seeded(seed) {
+    return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+function texture(size, draw) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    return `url("${c.toDataURL('image/png')}")`;
+}
+function glitterTextures() {
+    if (glitterDone || typeof document === 'undefined') return;
+    glitterDone = true;
+    try {
+        const colors = ['255,255,255', '255,255,255', '255,226,150', '255,184,230', '170,238,255', '255,240,200'];
+        // drawn at twice the size they are shown, so they stay crisp on phone screens
+        const dot = (g, x, y, r, rgb, a = 1) => {
+            const grad = g.createRadialGradient(x, y, 0, x, y, r * 2.4);
+            grad.addColorStop(0, `rgba(${rgb},${a})`);
+            grad.addColorStop(0.4, `rgba(${rgb},${a * 0.55})`);
+            grad.addColorStop(1, `rgba(${rgb},0)`);
+            g.fillStyle = grad;
+            g.fillRect(x - r * 2.4, y - r * 2.4, r * 4.8, r * 4.8);
+        };
+        const fine = texture(640, (g, n) => {
+            const rnd = seeded(7);
+            for (let i = 0; i < 420; i++) dot(g, rnd() * n, rnd() * n, 1 + rnd() * 1.8, colors[Math.floor(rnd() * colors.length)], 0.7 + rnd() * 0.3);
+        });
+        const big = texture(640, (g, n) => {
+            const rnd = seeded(23);
+            for (let i = 0; i < 26; i++) {
+                const x = rnd() * n, y = rnd() * n, r = 2.4 + rnd() * 2.2, rgb = colors[Math.floor(rnd() * colors.length)];
+                dot(g, x, y, r, rgb);
+                // a thin four-point flash, as light catches a flake
+                g.strokeStyle = `rgba(${rgb},0.75)`;
+                g.lineWidth = 1;
+                g.beginPath();
+                g.moveTo(x - r * 4, y); g.lineTo(x + r * 4, y);
+                g.moveTo(x, y - r * 4); g.lineTo(x, y + r * 4);
+                g.stroke();
+            }
+        });
+        // where the light catches: soft patches at random places; sliding it over the sparkles as
+        // the light moves makes some flakes light up and others go out
+        const catchMask = texture(320, (g, n) => {
+            const rnd = seeded(41);
+            for (let i = 0; i < 70; i++) {
+                const x = rnd() * n, y = rnd() * n, r = 10 + rnd() * 22;
+                const grad = g.createRadialGradient(x, y, 0, x, y, r);
+                grad.addColorStop(0, 'rgba(0,0,0,1)');
+                grad.addColorStop(0.6, 'rgba(0,0,0,0.8)');
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                g.fillStyle = grad;
+                g.fillRect(x - r, y - r, r * 2, r * 2);
+            }
+        });
+        const s = document.documentElement.style;
+        s.setProperty('--rv-glitter-fine', fine);
+        s.setProperty('--rv-glitter-big', big);
+        s.setProperty('--rv-glitter-catch', catchMask);
+    } catch (e) {
+        console.warn(LOG, 'glitter', e);
+    }
 }
 const reduced = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 const COVER = '.cb_tile, .cb_heroimg';
@@ -212,10 +285,16 @@ function applyGyro() {
     const angle = globalThis.screen?.orientation?.angle ?? globalThis.orientation ?? 0;
     let x = reading.gamma, y = reading.beta;
     if (angle === 90) { x = reading.beta; y = -reading.gamma; } else if (angle === 270 || angle === -90) { x = -reading.beta; y = reading.gamma; } else if (angle === 180) { x = -reading.gamma; y = -reading.beta; }
-    if (!base || base.el !== el) base = { el, x, y };
-    // held still for a while, that becomes the new straight: the light drifts back to the middle
-    base.x += (x - base.x) * 0.006;
-    base.y += (y - base.y) * 0.006;
+    if (!base || base.el !== el) base = { el, x, y, sx: x, sy: y };
+    // A phone held still still reports tiny changes; they made the light (and the glitter) quiver.
+    // The reading is smoothed, and the light moves only once the phone has really turned a little.
+    base.sx += (x - base.sx) * 0.25;
+    base.sy += (y - base.sy) * 0.25;
+    if (base.lx !== undefined && Math.abs(base.sx - base.lx) < 0.4 && Math.abs(base.sy - base.ly) < 0.4 && el.dataset.gyro) return;
+    base.lx = base.sx;
+    base.ly = base.sy;
+    x = base.sx;
+    y = base.sy;
     if (el.dataset.playing) return;
     el.dataset.gyro = '1';
     el.classList.add('rv_live');
