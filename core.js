@@ -5,7 +5,7 @@
 import { isAvatarUrl, withVersion, versionOf } from './lib.js';
 
 export const MODULE = 'chat_browser';
-export const VERSION = '2.7.1'; // keep in sync with manifest.json
+export const VERSION = '2.8.0'; // keep in sync with manifest.json
 export const LOG = '[Reverie]';
 export const BASE_URL = new URL('.', import.meta.url);
 export const CACHE_KEY = 'cb_cache_v1';
@@ -34,6 +34,7 @@ export const DEFAULTS = Object.freeze({
     hoverOpen: true,     // …run once on the big cover when a card page opens
     hoverScroll: false,  // …run once on each card as it scrolls into view
     hoverGyro: false,    // …follow how the phone is tilted, on the card page
+    hoverTilt: false,    // …and the card leans toward the light (any style)
 });
 
 export const ctx = () => SillyTavern.getContext();
