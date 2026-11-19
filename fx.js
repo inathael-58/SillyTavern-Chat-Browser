@@ -6,7 +6,7 @@
  *   - once, when a card page opens (the big cover)               setting hoverOpen
  *   - once, when a card scrolls into view in the gallery        setting hoverScroll
  *   - on the card page while the phone is tilted: the light     setting hoverGyro
- *     follows how it is held, like a trading card in the hand (foil, tilt and spotlight)
+ *     follows how it is held, like a trading card in the hand (every style)
  * --mx / --my say where the light falls and --rx / --ry how far the card leans.
  */
 
@@ -19,10 +19,11 @@ export const HOVERS = [
     ['spot', 'สปอตไลต์'],
     ['glow', 'ขอบเรืองแสง'],
     ['bloom', 'สว่างนุ่ม'],
+    ['glitter', 'กลิตเตอร์'],
     ['none', 'ไม่มี'],
 ];
-/** The styles where the light has a place: they follow the mouse, and the phone when it tilts. */
-export const FOLLOWS = new Set(['holo', 'tilt', 'spot']);
+/** The styles where the light has a place: they follow the mouse and sweep across when played once. */
+export const FOLLOWS = new Set(['holo', 'tilt', 'spot', 'glitter']);
 
 export const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
 export function applyHover(root = ui.root) {
@@ -37,9 +38,11 @@ function setLight(el, fx, fy, lean = 1) {
     el.style.setProperty('--my', `${(fy * 100).toFixed(1)}%`);
     el.style.setProperty('--ry', `${((fx - 0.5) * 14 * lean).toFixed(2)}deg`);
     el.style.setProperty('--rx', `${((0.5 - fy) * 14 * lean).toFixed(2)}deg`);
+    // which way the light lies from the middle: the glowing border turns its light toward it
+    el.style.setProperty('--ga', `${(Math.atan2(fy - 0.5, fx - 0.5) * 180 / Math.PI + 90).toFixed(1)}deg`);
 }
 function settle(el) {
-    for (const p of ['--mx', '--my', '--rx', '--ry']) el.style.removeProperty(p);
+    for (const p of ['--mx', '--my', '--rx', '--ry', '--ga']) el.style.removeProperty(p);
 }
 
 /**
@@ -199,7 +202,8 @@ function onOrient(e) {
 function applyGyro() {
     gFrame = 0;
     const el = ui.root?.querySelector('.cb_heroimg');
-    const on = el && reading && FOLLOWS.has(hoverMode()) && !reduced();
+    // every style follows the phone: the glint slides, the border light turns, the foil and glitter shimmer
+    const on = el && reading && hoverMode() !== 'none' && !reduced();
     for (const old of ui.root?.querySelectorAll('[data-gyro]') ?? []) {
         if (old !== el || !on) { delete old.dataset.gyro; fadeOut(old); }
     }
