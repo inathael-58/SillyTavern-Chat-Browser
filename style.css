@@ -1316,7 +1316,8 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 .cb_tile {
     position: relative;
     aspect-ratio: 2 / 3;
-    border-radius: 18px;
+    --rv-r: 18px; /* the corner radius; .cb_cover clips its picture to it (see the Safari note below) */
+    border-radius: var(--rv-r);
     overflow: hidden;
     isolation: isolate;
     cursor: pointer;
@@ -1434,7 +1435,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 
 /* compact: small covers, many on screen, for flicking through a big collection */
 .cb_grid.cb_g_compact { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
-.cb_g_compact .cb_tile { border-radius: 12px; box-shadow: 0 6px 14px -10px var(--cb-shadow), 0 0 0 1px var(--cb-line); }
+.cb_g_compact .cb_tile { --rv-r: 12px; box-shadow: 0 6px 14px -10px var(--cb-shadow), 0 0 0 1px var(--cb-line); }
 .cb_g_compact .cb_tile.cb_isopen { box-shadow: 0 0 0 2px var(--cb-accent), 0 8px 18px -10px var(--cb-accent); }
 .cb_g_compact .cb_tiletop { top: 5px; left: 5px; right: 5px; gap: 3px; }
 .cb_g_compact .cb_tmark { width: 19px; height: 19px; font-size: 0.55em; }
@@ -1726,7 +1727,7 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
     .cb_grid { gap: 10px; padding: 8px 4px 4px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
     .cb_grid.cb_g_compact { gap: 6px; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
     .cb_gridbar { padding: 6px 6px 0; }
-    .cb_tile { border-radius: 16px; }
+    .cb_tile { --rv-r: 16px; }
     .cb_cardnav { padding: 4px 6px; }
     .cb_hero { margin: 0 -4px; }
     .cb_cnote { margin: 4px 4px 12px; }
@@ -1754,6 +1755,15 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 }
 /* badges and the name stay above the light; the glowing border goes over everything */
 .cb_tiletop, .cb_tileinfo { z-index: 2; }
+
+/* Rounded corners that hold while a card animates. Safari (iPhone, iPad) stops clipping a rounded
+   overflow:hidden box to its corners while the box or a picture in it is animating (cards sliding in,
+   a cover fading in), so pictures showed square corners first and rounded off a moment later. Each
+   layer is clipped to the corners itself. The card keeps no clip of its own: its shadow and rings
+   draw outside it. */
+.cb_cover { clip-path: inset(0 round var(--rv-r, 18px)); }
+.cb_tileinfo { border-bottom-left-radius: inherit; border-bottom-right-radius: inherit; }
+.cb_heroimg > img, .cb_heroimg .cb_tcollage { clip-path: inset(0 round 22px); }
 @property --rv-ang { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
 @keyframes rv_ang { to { --rv-ang: 360deg; } }
 @keyframes rv_glint { from { background-position: 100% 0; } to { background-position: 0 0; } }
@@ -1774,21 +1784,24 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 [data-hover="glint"] :is(.cb_tile, .cb_heroimg).rv_live::after { background-position: 0 0; transition: background-position 1.05s cubic-bezier(0.45, 0.05, 0.3, 1); }
 [data-hover="glint"] :is(.cb_tile, .cb_heroimg).rv_play::after { animation: rv_glint 1.05s cubic-bezier(0.45, 0.05, 0.3, 1); }
 
-/* ฟอยล์รุ้ง: a holographic foil that shifts with the light */
+/* ฟอยล์รุ้ง: a holographic shimmer where the light falls. Only around the light, and faint, so the
+   card keeps its own colours (a foil over the whole card turned a red coat green). */
 [data-hover="holo"] :is(.cb_tile, .cb_heroimg)::after {
     transition: opacity 0.35s;
     mix-blend-mode: color-dodge;
     background: repeating-linear-gradient(115deg, #ff5f9e 0%, #ffd36e 8%, #6effc6 16%, #6ec8ff 24%, #c78bff 32%, #ff5f9e 40%);
     background-size: 300% 300%;
     background-position: var(--mx) var(--my);
-    filter: saturate(1.2) brightness(0.7);
+    filter: saturate(1.1) brightness(0.55);
+    -webkit-mask-image: radial-gradient(circle at var(--mx) var(--my), #000 0, transparent 55%);
+    mask-image: radial-gradient(circle at var(--mx) var(--my), #000 0, transparent 55%);
 }
 [data-hover="holo"] :is(.cb_tile, .cb_heroimg)::before {
     transition: opacity 0.35s;
-    mix-blend-mode: overlay;
-    background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.75), transparent 45%);
+    mix-blend-mode: soft-light;
+    background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.55), transparent 42%);
 }
-[data-hover="holo"] :is(.cb_tile, .cb_heroimg).rv_live::after { opacity: 0.55; }
+[data-hover="holo"] :is(.cb_tile, .cb_heroimg).rv_live::after { opacity: 0.4; }
 [data-hover="holo"] :is(.cb_tile, .cb_heroimg).rv_live::before { opacity: 1; }
 
 /* เอียงตามเมาส์: the card leans toward the light, with a highlight where it falls */
