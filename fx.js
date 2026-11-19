@@ -10,25 +10,43 @@
  * --mx / --my say where the light falls and --rx / --ry how far the card leans.
  */
 
-import { settings, ui, clamp, LOG } from './core.js';
+import { settings, saveSettings, ui, clamp, LOG } from './core.js';
 
 export const HOVERS = [
     ['glint', 'แสงวาบ'],
     ['holo', 'ฟอยล์รุ้ง'],
-    ['tilt', 'เอียงตามเมาส์'],
     ['spot', 'สปอตไลต์'],
     ['glow', 'ขอบเรืองแสง'],
-    ['bloom', 'สว่างนุ่ม'],
     ['glitter', 'กลิตเตอร์'],
     ['none', 'ไม่มี'],
 ];
 /** The styles where the light has a place: they follow the mouse and sweep across when played once. */
-export const FOLLOWS = new Set(['holo', 'tilt', 'spot', 'glitter']);
+export const FOLLOWS = new Set(['holo', 'spot', 'glitter']);
 
-export const hoverMode = () => (HOVERS.some(([id]) => id === settings().hover) ? settings().hover : 'glint');
+/**
+ * The picked style. 2.8 dropped two: "tilt" became a switch that works with every style (hoverTilt),
+ * and "bloom" looked too much like the spotlight. Either one picked before becomes the spotlight;
+ * tilt keeps its lean by turning the switch on.
+ */
+export function hoverMode() {
+    const s = settings();
+    if (s.hover === 'tilt' || s.hover === 'bloom') {
+        if (s.hover === 'tilt') s.hoverTilt = true;
+        s.hover = 'spot';
+        saveSettings();
+        // the settings panel may already show the old choice
+        const pick = document.getElementById('cb_set_hover'), lean = document.getElementById('cb_set_fxtilt');
+        if (pick) pick.value = s.hover;
+        if (lean) lean.checked = !!s.hoverTilt;
+    }
+    return HOVERS.some(([id]) => id === s.hover) ? s.hover : 'glint';
+}
+/** The card leans toward the light, with any style. */
+const leans = () => !!settings().hoverTilt && hoverMode() !== 'none';
 export function applyHover(root = ui.root) {
     if (!root) return;
     root.dataset.hover = hoverMode();
+    root.toggleAttribute('data-tilt', leans());
     if (hoverMode() === 'glitter') glitterTextures();
 }
 
@@ -148,7 +166,7 @@ export function wireCoverFx(list) {
         fadeOut(el);
     }, { passive: true });
     list.addEventListener('pointermove', e => {
-        if (e.pointerType !== 'mouse' || !FOLLOWS.has(hoverMode())) return;
+        if (e.pointerType !== 'mouse' || (!FOLLOWS.has(hoverMode()) && !leans())) return;
         const el = e.target.closest?.(COVER);
         if (!el || el.dataset.playing) return;
         last = { el, x: e.clientX, y: e.clientY };
@@ -178,23 +196,26 @@ export function playCover(el) {
         el.classList.remove('rv_play');
         void el.offsetWidth; // start the animation again
         el.classList.add('rv_play');
-        setTimeout(done, mode === 'glint' ? 1150 : 1600);
+        const dur = mode === 'glint' ? 1150 : 1600;
+        setTimeout(done, dur);
+        // with the lean switched on, the card tips along with the light as it passes
+        if (leans()) sweep(el, dur - 100);
         return;
     }
-    if (mode === 'bloom') {
-        el.classList.add('rv_live');
-        setTimeout(done, 1000);
-        return;
-    }
-    // foil, tilt, spotlight: the light crosses from the upper left to the lower right and the card leans with it
+    // foil, spotlight, glitter: the light crosses from the upper left to the lower right (and the card leans with it)
     el.classList.add('rv_live');
-    const t0 = performance.now(), dur = 1400;
+    sweep(el, 1400, done);
+}
+
+/** The light (and the lean) crosses the cover once, from the upper left to the lower right. */
+function sweep(el, dur, done) {
+    const t0 = performance.now();
     const step = now => {
         if (!el.isConnected) return;
         const k = Math.min(1, (now - t0) / dur);
         const e = k < 0.5 ? 2 * k * k : 1 - ((-2 * k + 2) ** 2) / 2;
         setLight(el, 0.1 + 0.8 * e, 0.3 + 0.4 * e, Math.sin(k * Math.PI));
-        if (k < 1) requestAnimationFrame(step); else done();
+        if (k < 1) requestAnimationFrame(step); else done?.();
     };
     requestAnimationFrame(step);
 }
@@ -276,6 +297,7 @@ function applyGyro() {
     gFrame = 0;
     const el = ui.root?.querySelector('.cb_heroimg');
     // every style follows the phone: the glint slides, the border light turns, the foil and glitter shimmer
+    // (and with the lean switched on, the card tips toward the light)
     const on = el && reading && hoverMode() !== 'none' && !reduced();
     for (const old of ui.root?.querySelectorAll('[data-gyro]') ?? []) {
         if (old !== el || !on) { delete old.dataset.gyro; fadeOut(old); }

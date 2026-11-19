@@ -1804,17 +1804,11 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 [data-hover="holo"] :is(.cb_tile, .cb_heroimg).rv_live::after { opacity: 0.4; }
 [data-hover="holo"] :is(.cb_tile, .cb_heroimg).rv_live::before { opacity: 1; }
 
-/* เอียงตามเมาส์: the card leans toward the light, with a highlight where it falls */
-[data-hover="tilt"] :is(.cb_tile, .cb_heroimg).rv_live {
+/* การ์ดเอียงตามแสง (Extensions → Reverie, data-tilt): with any style, the card leans toward the light */
+[data-tilt] :is(.cb_tile, .cb_heroimg):is(.rv_live, .rv_play) {
     transform: perspective(700px) rotateX(var(--rx)) rotateY(var(--ry));
     transition: transform 0.08s linear, box-shadow 0.28s;
 }
-[data-hover="tilt"] :is(.cb_tile, .cb_heroimg)::after {
-    transition: opacity 0.3s;
-    mix-blend-mode: soft-light;
-    background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.38), transparent 55%);
-}
-[data-hover="tilt"] :is(.cb_tile, .cb_heroimg).rv_live::after { opacity: 1; }
 
 /* สปอตไลต์: the picture dims a little, a soft light moves over it */
 [data-hover="spot"] :is(.cb_tile .cb_cover, .cb_heroimg > img, .cb_heroimg .cb_tcollage) { transition: filter 0.35s; }
@@ -1840,13 +1834,6 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 [data-hover="glow"] :is(.cb_tile, .cb_heroimg).rv_play::before { animation: rv_ang 1.5s linear, rv_flash 1.5s ease both; }
 [data-hover="glow"] .cb_tile.rv_live { box-shadow: 0 0 28px -6px var(--cb-accent), 0 18px 34px -16px var(--cb-shadow); }
 
-/* สว่างนุ่ม: the picture brightens a little, with an accent ring */
-[data-hover="bloom"] :is(.cb_tile .cb_cover, .cb_heroimg > img, .cb_heroimg .cb_tcollage) { transition: filter 0.45s ease; }
-[data-hover="bloom"] :is(.cb_tile.rv_live .cb_cover, .cb_heroimg.rv_live > img, .cb_heroimg.rv_live .cb_tcollage) { filter: brightness(1.1) saturate(1.18); }
-[data-hover="bloom"] :is(.cb_tile, .cb_heroimg)::after { transition: opacity 0.45s; background: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), transparent 40%); }
-[data-hover="bloom"] :is(.cb_tile, .cb_heroimg).rv_live::after { opacity: 1; }
-[data-hover="bloom"] .cb_tile.rv_live { box-shadow: 0 0 0 2px var(--cb-accent), 0 16px 32px -14px var(--cb-accent); }
-[data-hover="bloom"] .cb_heroimg.rv_live { box-shadow: 0 0 0 2px var(--cb-accent), 0 24px 48px -18px rgba(0, 0, 0, 0.65); }
 
 /* กลิตเตอร์: sparkles at random places in a few colours, and some larger flakes with a four-point
    flash (pictures drawn once by fx.js: --rv-glitter-*). They show around the light, through random
@@ -1883,14 +1870,12 @@ body.cb_cardhold #rightNavHolder > .drawer-toggle { -webkit-user-select: none; u
 [data-hover="glitter"] .cb_tile.rv_live { box-shadow: 0 18px 34px -16px var(--cb-shadow), 0 0 0 1px color-mix(in srgb, #fff 45%, transparent); }
 
 /* Tilting the phone on a card page ([data-gyro]): the styles that otherwise run once follow it too.
-   The glint's band slides across as the phone turns, the glowing border turns its light toward the
-   tilt, and the soft light of bloom moves with it. */
+   The glint's band slides across as the phone turns, and the glowing border turns its light toward the tilt. */
 [data-hover="glint"] :is(.cb_tile, .cb_heroimg)[data-gyro]::after { background-position: calc(100% - var(--mx) * 0.75 - var(--my) * 0.25) 0; transition: none; }
 [data-hover="glow"] :is(.cb_tile, .cb_heroimg)[data-gyro]::before { opacity: 1; animation: none; --rv-ang: calc(var(--ga, 90deg) + 72deg); }
-[data-hover="bloom"] :is(.cb_tile, .cb_heroimg)[data-gyro]::after { background: radial-gradient(circle at var(--mx) var(--my), rgba(255, 255, 255, 0.26), transparent 60%); }
 
 /* picking cards: the card stays still */
-.cb_selecting .cb_tile.rv_live { transform: none !important; }
+.cb_selecting .cb_tile:is(.rv_live, .rv_play) { transform: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
     .cb_tile, .cb_card, .cb_heroimg, .cb_full, .cb_lightbox, .cb_lbimgs img { animation: none !important; transition: none !important; }

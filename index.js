@@ -2629,10 +2629,11 @@ function renderSettingsPanel() {
                     <select id="cb_set_hover" class="text_pole">${HOVERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
                 </div>
                 <small class="cb_sethint">ตอนชี้เมาส์ที่ปกการ์ด ไม่มีแบบไหนขยายรูป · จอสัมผัสไม่มีเมาส์ ใช้สามข้อด้านล่างแทน · ปิดเองถ้าเปิด "ลดการเคลื่อนไหว" ในระบบ</small>
+                <label class="checkbox_label"><input type="checkbox" id="cb_set_fxtilt"> การ์ดเอียงตามแสง (ใช้ได้กับทุกแบบ)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_fxopen"> เล่นเอฟเฟกต์ที่รูปใหญ่ตอนเปิดหน้าการ์ด</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_fxscroll"> เล่นเอฟเฟกต์ตอนการ์ดเลื่อนเข้ามาในจอ (แกลเลอรี ใบละครั้ง)</label>
                 <label class="checkbox_label"><input type="checkbox" id="cb_set_fxgyro"> เอียงมือถือ/ไอแพดแล้วแสงบนรูปใหญ่ขยับตาม</label>
-                <small class="cb_sethint">เอียงเครื่อง: ใช้กับ ฟอยล์รุ้ง · เอียงตามเมาส์ · สปอตไลต์ ในหน้าการ์ด เหมือนถือการ์ดสะสมเอียงรับแสง · iPhone/iPad จะถามขออนุญาตใช้เซนเซอร์ตอนติ๊ก</small>
+                <small class="cb_sethint">เอียงเครื่อง: ใช้ได้ทุกแบบในหน้าการ์ด เหมือนถือการ์ดสะสมเอียงรับแสง · iPhone/iPad จะถามขออนุญาตใช้เซนเซอร์ตอนติ๊ก</small>
                 <div class="cb_setrow">
                     <span>การ์ดต่อหน้า</span>
                     <select id="cb_set_pagecards" class="text_pole">${PAGE_SIZES.cards.map(n => `<option value="${n}">${n || 'ทั้งหมด'}</option>`).join('')}</select>
@@ -2684,6 +2685,8 @@ function renderSettingsPanel() {
     $('cb_set_cardbtn').value = cardMode();
     $('cb_set_hover').value = hoverMode();
     $('cb_set_hover').addEventListener('change', e => { s.hover = e.target.value; saveSettings(); applyHover(); });
+    $('cb_set_fxtilt').checked = !!s.hoverTilt;
+    $('cb_set_fxtilt').addEventListener('change', e => { s.hoverTilt = e.target.checked; saveSettings(); applyHover(); });
     $('cb_set_fxopen').checked = !!s.hoverOpen;
     $('cb_set_fxscroll').checked = !!s.hoverScroll;
     $('cb_set_fxgyro').checked = !!s.hoverGyro;
