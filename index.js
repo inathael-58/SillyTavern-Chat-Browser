@@ -1260,9 +1260,8 @@ function openBrowser() {
         </section>`;
     document.body.append(root);
     ui.root = root;
-    // effects on covers: cards play again as they scroll in; the motion sensors are asked for from this tap
+    // effects on covers: cards play again as they scroll in (the motion sensors are asked for when a card page opens)
     resetScrollFx();
-    if (settings().hoverGyro) askGyro();
     syncGyro();
     // Visible first, then filled: if drawing fails the panel still shows (with its close button) and says why.
     requestAnimationFrame(() => root.classList.add('cb_in'));

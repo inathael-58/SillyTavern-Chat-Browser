@@ -280,11 +280,13 @@ export const gyroSupported = () => typeof globalThis.DeviceOrientationEvent === 
  * iPhone and iPad ask the user before a page may read the motion sensors, and only from a tap.
  * Call it straight from one. Returns 'granted', 'denied' or 'unsupported'.
  */
+let gyroAnswer = '';   // Safari keeps the user's answer only until the page reloads, so ask once per page
 export async function askGyro() {
     const D = globalThis.DeviceOrientationEvent;
     if (typeof D !== 'function') return 'unsupported';
     if (typeof D.requestPermission !== 'function') return 'granted';
-    try { return await D.requestPermission(); } catch (e) { console.warn(LOG, 'motion sensors', e); return 'denied'; }
+    if (gyroAnswer) return gyroAnswer;
+    try { return (gyroAnswer = await D.requestPermission()); } catch (e) { console.warn(LOG, 'motion sensors', e); return 'denied'; }
 }
 
 function onOrient(e) {
