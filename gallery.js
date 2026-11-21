@@ -5,7 +5,7 @@
 
 import { ctx, settings, saveSettings, esc, toast, errText, st, charOf, charIndex, groupOf, thumb, currentKey, isGenerating, data, ui, app, sheet, fullAvatar } from './core.js';
 import { addedAt, fullTime, noteText, relTime, tagCounts } from './lib.js';
-import { playCardPage } from './fx.js';
+import { askGyro, playCardPage } from './fx.js';
 
 // ---------------------------------------------------------------- gallery cards
 
@@ -345,6 +345,9 @@ export function updateFromFile(avatar) {
 export function openCard(id) {
     const list = ui.root?.querySelector('.cb_list');
     if (!list || !id) return;
+    // the tilt light only lives on a card page: iPhone and iPad ask for the sensors here, straight from this tap,
+    // not every time Reverie opens
+    if (settings().hoverGyro) askGyro();
     if (!ui.card) ui.gridTop = list.scrollTop;
     ui.card = id;
     ui.noteOpen = false;
